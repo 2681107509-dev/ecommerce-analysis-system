@@ -1,0 +1,12 @@
+# 原始数据（体积大，不上传）
+data/datas.xlsx
+*.xlsx
+
+# Python 运行缓存
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# 系统隐藏文件
+.DS_Store
+Thumbs.db
