@@ -2,7 +2,7 @@
 
 ## 📌 项目简介
 
-基于 **10万+ 条电商真实订单数据**，独立完成从数据清洗、特征工程到多维分析与可视化的完整链路。通过 Pandas 进行数据聚合与时间序列处理，使用 Matplotlib 输出业务看板，挖掘销售趋势、渠道分布与高价值用户特征，为运营策略提供数据支撑。
+基于 **10万+ 条电商真实订单数据**，独立完成从数据清洗、特征工程到多维分析与可视化的完整链路。通过 Pandas 进行数据聚合与时间序列处理，使用 Matplotlib 输出业务看板，并利用 MySQL 进行复杂 SQL 分析与用户留存/分层挖掘，为运营策略提供数据支撑。
 
 ---
 
@@ -10,8 +10,9 @@
 
 | 类别 | 技术 |
 |------|------|
-| **语言** | Python 3.8+ |
+| **语言** | Python 3.8+, SQL |
 | **数据处理** | pandas, numpy |
+| **数据库** | MySQL |
 | **可视化** | matplotlib, seaborn |
 | **开发环境** | Jupyter Notebook |
 | **版本控制** | Git |
@@ -19,6 +20,8 @@
 **数据处理流程**：
 ```
 数据清洗 → 特征提取 → 多维聚合 → 趋势平滑 → 可视化输出
+                                                        ↓
+                                         MySQL导入 → SQL高级分析 → RFM分层
 ```
 
 ---
@@ -51,6 +54,11 @@
 - 7日移动平均线平滑处理
 - 饼图占比优化（合并小渠道）
 
+### 6. SQL 高级分析 (`sql/`)
+- **留存分析**：次日留存率、7日/30日留存率，衡量用户粘性
+- **RFM 用户分层**：基于 Recency（最近消费）、Frequency（消费频次）、Monetary（消费金额）三维度划分用户价值层级
+- **用户群体分类**：重要价值用户、重要发展用户、重要保持用户、流失用户、一般用户
+
 ---
 
 ## 📁 项目结构
@@ -58,27 +66,32 @@
 ```
 ecommerce_analysis/
 ├── data/
-│   ├── datas.xlsx              # 原始订单数据（敏感数据，不上传）
-│   └── cleaned_orders.csv     # 清洗后数据 (102,318 条)
+│   ├── datas.xlsx               # 原始订单数据（敏感数据，不上传）
+│   └── cleaned_orders.csv       # 清洗后数据 (102,318 条)
 ├── notebook/
-│   ├── 01_data_cleaning.ipynb     # 数据清洗
-│   ├── 02_sales_analysis.ipynb     # 销售额分析
-│   ├── 03_time_analysis.ipynb      # 时间维度分析
-│   ├── 04_product_user_analysis.ipynb   # 商品用户分析
-│   └── 05_visualization.ipynb     # 可视化看板
+│   ├── 01_data_cleaning.ipynb   # 数据清洗
+│   ├── 02_sales_analysis.ipynb  # 销售额分析
+│   ├── 03_time_analysis.ipynb   # 时间维度分析
+│   ├── 04_product_user_analysis.ipynb  # 商品用户分析
+│   └── 05_visualization.ipynb   # 可视化看板
+├── sql/
+│   ├── 01_create_table.sql      # 建库建表语句
+│   ├── 02_import_data.sql       # CSV 数据导入
+│   └── 03_analysis.sql          # 留存分析 + RFM 分层
 ├── output/
-│   ├── 03_daily_sales.csv         # 每日销售额
-│   ├── 03_hourly_orders.csv       # 每小时订单分布
-│   ├── 03_weekday_sales.csv       # 星期几订单分布
-│   ├── 04_product_orders.csv      # 商品订单量
-│   ├── 04_product_sales.csv       # 商品销售额
-│   ├── 04_user_spending.csv       # 用户消费金额
-│   ├── 05_01_商品销售额TOP10.png       # 图1：商品销售柱状图
-│   ├── 05_02_平台销售额占比.png         # 图2：平台占比饼图
-│   ├── 05_03_每日销售趋势.png           # 图3：日销趋势+7日均线
-│   ├── 05_04_用户消费TOP10.png         # 图4：用户消费柱状图
-│   ├── 05_核心业务分析图.png             # 原组合图
-│   └── 05_核心业务分析图_四合一.png      # 四合一总览
+│   ├── 03_daily_sales.csv
+│   ├── 03_hourly_orders.csv
+│   ├── 03_weekday_sales.csv
+│   ├── 04_product_orders.csv
+│   ├── 04_product_sales.csv
+│   ├── 04_user_spending.csv
+│   ├── 05_01_商品销售额TOP10.png
+│   ├── 05_02_平台销售额占比.png
+│   ├── 05_03_每日销售趋势.png
+│   ├── 05_04_用户消费TOP10.png
+│   ├── 05_核心业务分析图.png
+│   ├── 05_核心业务分析图_四合一.png
+│   └── rfm_user_segmentation.png.jpg  # RFM 用户分层图
 ├── .gitignore
 ├── README.md
 └── requirements.txt
@@ -115,9 +128,17 @@ ecommerce_analysis/
 - 具备典型**"二八定律"**特征
 - **建议**：搭建会员分层与精准营销体系
 
+### 5️⃣ 用户留存与分层（SQL 分析结果）
+- **RFM 模型**：将用户分为 5 个层级（重要价值、重要发展、重要保持、流失、一般用户）
+- 平均每用户消费 1.31 单，客单价约 1,303 元
+- 大部分用户为**一次性消费**，复购率有较大提升空间
+- **建议**：针对「重要保持用户」做唤醒营销，针对「重要价值用户」搭建 VIP 会员体系
+
 ---
 
 ## 📈 可视化成果
+
+### Python 可视化
 
 | 图表 | 说明 |
 |------|------|
@@ -126,6 +147,12 @@ ecommerce_analysis/
 | ![日销趋势](output/05_03_每日销售趋势.png) | 原始数据+7日均线，看清大方向 |
 | ![用户消费](output/05_04_用户消费TOP10.png) | 高价值用户挖掘 |
 | ![四合一总览](output/05_核心业务分析图_四合一.png) | 业务看板总览 |
+
+### SQL 分析结果
+
+| 图表 | 说明 |
+|------|------|
+| ![RFM用户分层](output/rfm_user_segmentation.png.jpg) | RFM 模型用户分层：重要价值/重要发展/重要保持/流失/一般用户分布 |
 
 ---
 
@@ -148,6 +175,10 @@ jupyter notebook
 # 03_time_analysis.ipynb
 # 04_product_user_analysis.ipynb
 # 05_visualization.ipynb
+
+# 5. SQL 分析（需 MySQL 环境）
+# 依次执行 sql/ 文件夹中的脚本
+# 01_create_table.sql → 02_import_data.sql → 03_analysis.sql
 ```
 
 ---
@@ -159,8 +190,9 @@ pandas>=1.3.0
 matplotlib>=3.4.0
 numpy>=1.21.0
 openpyxl>=3.0.0
+pymysql
 ```
 
 ---
 
-> 💡 **项目亮点**：完整的数据分析流程、工程化的文件命名、规范的 Git 提交、清晰的业务洞察输出。
+> 💡 **项目亮点**：完整的数据分析流程（Python + SQL）、工程化的文件命名、规范的 Git 提交、用户留存与 RFM 分层分析、清晰的业务洞察输出。
