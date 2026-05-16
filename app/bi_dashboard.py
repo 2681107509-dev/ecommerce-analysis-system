@@ -209,7 +209,8 @@ with col_chart1:
             hovermode='x unified',
             xaxis=dict(
                 tickformat='%Y-%m-%d',
-                tickangle=45
+                tickangle=45,
+                nticks=min(len(daily_sales), 10)
             ),
             plot_bgcolor='rgba(0,0,0,0.03)'
         )
@@ -332,12 +333,17 @@ with col_rfm:
     fig_rfm.update_traces(
         textposition='outside',
         text=custom_labels,
-        textfont=dict(size=11)
+        textfont=dict(size=11),
+        marker=dict(
+            line=dict(color='white', width=1)
+        )
     )
     
     fig_rfm.update_layout(
         showlegend=True,
-        margin=dict(t=60, b=60, l=60, r=80)
+        margin=dict(t=60, b=60, l=60, r=80),
+        width=400,
+        height=350
     )
     st.plotly_chart(fig_rfm, use_container_width=True)
     
@@ -383,6 +389,7 @@ with col_product:
 with col_user:
     st.subheader("👑 用户消费 TOP10")
     top_users = filtered_df.groupby('用户名')['付款金额'].sum().nlargest(10).reset_index()
+    top_users = top_users.sort_values('付款金额', ascending=False)
     
     fig_user = px.bar(
         top_users,
@@ -394,11 +401,12 @@ with col_user:
     )
     fig_user.update_layout(
         xaxis_title="消费金额 (元)",
-        yaxis_title="用户",
+        yaxis_title="",
         xaxis=dict(ticksuffix="元"),
         coloraxis_colorbar=dict(title="消费金额 (元)"),
-        margin=dict(t=30, b=30, l=100, r=160),
-        bargroupgap=0.1
+        margin=dict(t=30, b=30, l=120, r=160),
+        bargroupgap=0.1,
+        yaxis=dict(autorange="reversed")
     )
     fig_user.update_traces(
         texttemplate='%{x:,.0f}',
