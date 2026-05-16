@@ -1,8 +1,8 @@
 # 🛒 电商订单数据分析项目
 
-[![Python](https://img.shields.io/badge/Python-3.11-blue?logo=python)](https://www.python.org/)
-[![Streamlit](https://img.shields.io/badge/Streamlit-BI看板-red?logo=streamlit)](https://streamlit.io/)
-[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+![Python](https://img.shields.io/badge/Python-3.11-blue?logo=python)
+![Streamlit](https://img.shields.io/badge/Streamlit-BI看板-red?logo=streamlit)
+![License](https://img.shields.io/badge/License-MIT-green)
 
 ## 🌐 在线演示
 
@@ -242,19 +242,21 @@ pymysql>=1.1.0
 
 ## 🗺️ 后续迭代规划
 
-- ✅ **已完成**：数据清洗 → 多维分析 → SQL 留存/RFM → Streamlit 交互式看板
-- 🔄 **进行中**：接入 FastAPI 数据接口，支持外部系统实时调用
-- 🚀 **规划中**：基于 LangChain + RAG 开发 AI 自然语言查数助手（Text-to-SQL），降低业务人员使用门槛
-- 📊 **监控化**：接入 Airflow 定时调度，实现日/周/月自动化数据报告推送
+- **已完成**：数据清洗 → 多维分析 → SQL 留存/RFM → Streamlit 交互式看板
+- **进行中**：接入 FastAPI 数据接口，支持外部系统实时调用
+- **规划中**：基于 LangChain + RAG 开发 AI 自然语言查数助手（Text-to-SQL），降低业务人员使用门槛
+- **监控化**：接入 Airflow 定时调度，实现日/周/月自动化数据报告推送
 
 ---
 
 ## ✅ 安全检查
 
-- [x] 无硬编码 API Key
-- [x] 无密码或敏感信息
-- [x] 无个人隐私数据
-- [x] 依赖清单完整
+| 检查项 | 状态 |
+|--------|------|
+| 无硬编码 API Key | ✅ 通过 |
+| 无密码或敏感信息 | ✅ 通过 |
+| 无个人隐私数据 | ✅ 通过 |
+| 依赖清单完整 | ✅ 通过 |
 
 ---
 
