@@ -197,11 +197,11 @@ with col_chart1:
             arrowcolor='rgba(255,107,107,0.8)',
             ax=40,
             ay=-40,
-            font=dict(size=11, color='#ff6b6b'),
-            bgcolor='rgba(255,255,255,0.9)',
-            bordercolor='#ff6b6b',
+            font=dict(size=12, color='#ffffff'),
+            bgcolor='rgba(0,0,0,0.75)',
+            bordercolor='rgba(255,107,107,0.6)',
             borderwidth=1,
-            borderpad=4
+            borderpad=6
         )
         
         fig_line.update_layout(
@@ -309,6 +309,7 @@ with col_rfm:
     rfm_counts = rfm_counts.sort_values('用户分层')
     
     total_rfm = rfm_counts['人数'].sum()
+    rfm_counts['占比'] = rfm_counts['人数'] / total_rfm * 100
     
     fig_rfm = px.pie(
         rfm_counts,
@@ -318,9 +319,16 @@ with col_rfm:
         color_discrete_sequence=px.colors.qualitative.Set2
     )
     
+    custom_labels = []
+    for _, row in rfm_counts.iterrows():
+        if row['占比'] >= 2:
+            custom_labels.append(f"{row['占比']:.1f}%<br>{row['用户分层']}")
+        else:
+            custom_labels.append("")
+    
     fig_rfm.update_traces(
         textposition='outside',
-        textinfo='percent+label',
+        text=custom_labels,
         textfont=dict(size=11)
     )
     
