@@ -164,7 +164,14 @@ st.markdown("---")
 # ========== 图表区域 ==========
 # 第一行：每日销售趋势 + 平台占比
 st.subheader("📈 每日销售趋势")
-col_chart1, col_chart2 = st.columns([2, 1])
+
+show_pie = len(platforms) > 1
+
+if show_pie:
+    col_chart1, col_chart2 = st.columns([2, 1])
+else:
+    col_chart1 = st.container()
+    col_chart2 = None
 
 with col_chart1:
     daily_sales = filtered_df.groupby(filtered_df['下单时间'].dt.date)['付款金额'].sum().reset_index()
@@ -218,7 +225,8 @@ with col_chart1:
     else:
         st.warning("⚠️ 当前筛选条件下无数据")
 
-with col_chart2:
+if col_chart2:
+    with col_chart2:
     platform_sales = filtered_df.groupby('平台类型')['付款金额'].sum().reset_index()
     total_platform_sales = platform_sales['付款金额'].sum()
     platform_sales['占比'] = platform_sales['付款金额'] / total_platform_sales * 100
