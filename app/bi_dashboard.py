@@ -148,7 +148,8 @@ col4.metric(
 col5.metric(
     label="🔄 复购率",
     value=f"{repeat_rate:.1f}%" if has_data else "-",
-    delta=f"{repeat_users:,} 人复购" if has_data else None
+    delta="无复购" if has_data and repeat_users == 0 else (f"{repeat_users:,} 人复购" if has_data else None),
+    delta_color="off" if has_data and repeat_users == 0 else "normal"
 )
 
 col6.metric(
@@ -233,11 +234,13 @@ with col_chart2:
         })
         major_platforms = pd.concat([major_platforms, other_row], ignore_index=True)
     
+    hole_size = 0.3 if len(major_platforms) > 1 else 0
+    
     fig_pie = px.pie(
         major_platforms,
         values='付款金额',
         names='平台类型',
-        hole=0.4,
+        hole=hole_size,
         color_discrete_sequence=px.colors.qualitative.Set2
     )
     fig_pie.update_traces(
