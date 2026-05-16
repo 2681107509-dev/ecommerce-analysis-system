@@ -1,8 +1,16 @@
 # 🛒 电商订单数据分析项目
 
+## 🌐 在线演示
+
+**BI 数据看板**：[https://ecommerce-analysis-system.streamlit.app](https://ecommerce-analysis-system.streamlit.app)
+
+> 点击上方链接即可在线体验完整的数据分析看板，无需本地部署！
+
+---
+
 ## 📌 项目简介
 
-基于 **10万+ 条电商真实订单数据**，独立完成从数据清洗、特征工程到多维分析与可视化的完整链路。通过 Pandas 进行数据聚合与时间序列处理，使用 Matplotlib 输出业务看板，并利用 MySQL 进行复杂 SQL 分析与用户留存/分层挖掘，为运营策略提供数据支撑。
+基于 **10万+ 条电商真实订单数据**，独立完成从数据清洗、特征工程到多维分析与可视化的完整链路。通过 Pandas 进行数据聚合与时间序列处理，使用 Plotly + Streamlit 构建交互式 BI 看板，并利用 MySQL 进行复杂 SQL 分析与用户留存/分层挖掘，为运营策略提供数据支撑。
 
 ---
 
@@ -12,7 +20,8 @@
 |------|------|----------|
 | 语言 | Python, SQL | Python 3.11, MySQL 8.0 |
 | 数据处理 | pandas, numpy | pandas 2.0+ |
-| 可视化 | matplotlib | 支持中文显示配置 |
+| 可视化 | matplotlib, plotly | 静态图 + 交互式图表 |
+| BI 看板 | Streamlit | 交互式数据大屏 |
 | 开发环境 | Jupyter Notebook, VS Code | 模块化 Notebook 开发 |
 | 版本控制 | Git, GitHub | 规范 commit 信息 |
 
@@ -21,6 +30,8 @@
 数据清洗 → 特征提取 → 多维聚合 → 趋势平滑 → 可视化输出
                                                         ↓
                                          MySQL导入 → SQL高级分析 → RFM分层
+                                                        ↓
+                                         Streamlit BI 看板 → 交互式探索
 ```
 
 ---
@@ -64,9 +75,19 @@
 - **用户群体分类**：重要价值用户、重要发展用户、重要保持用户、流失用户、一般用户
 - 📌 **结论**：用户平均仅消费 1.31 次，近四分之一用户（22.98%）已进入流失状态，复购激活和流失预警是当前最紧迫的运营课题。
 
+### 7. 交互式 BI 看板 (`app/bi_dashboard.py`)
+- **核心指标卡**：总销售额、订单数、活跃用户、客单价、复购率、退款率
+- **每日销售趋势**：折线图 + 峰值标注
+- **平台销售占比**：动态饼图（单平台时自动隐藏）
+- **24小时下单分布**：柱状图，揭示用户行为规律
+- **RFM 用户分层**：饼图 + 业务洞察建议
+- **商品/用户 TOP10**：排行榜 + 悬停详情
+- **交互筛选**：平台多选、日期范围选择
+- 📌 **亮点**：Toast 提示、空数据处理、动态布局、业务洞察文案
+
 ---
 
-## � 关键指标速览
+## 📊 关键指标速览
 
 | 指标 | 数值 | 说明 |
 |------|------|------|
@@ -75,41 +96,29 @@
 | 分析用户数 | 78,060 名 | 去重后独立用户 |
 | 时间跨度 | 2025.01-2026.01 | 全年销售数据 |
 | 产出图表 | 6 张 | 4 张独立图 + 1 张总览 + 1 张 RFM |
+| BI 看板 | 1 个 | Streamlit 交互式大屏 |
 | SQL 脚本 | 3 个模块 | 建表/导入/高级分析 |
 
 ---
 
-## � 项目结构
+## 📁 项目结构
 
 ```
 ecommerce_analysis/
+├── app/
+│   └── bi_dashboard.py           # Streamlit BI 看板
 ├── data/
-│   ├── datas.xlsx               # 原始订单数据（敏感数据，不上传）
-│   └── cleaned_orders.csv       # 清洗后数据 (100,286 条)
+│   └── cleaned_orders.csv        # 清洗后数据 (100,286 条)
 ├── notebook/
-│   ├── 01_data_cleaning.ipynb   # 数据清洗
-│   ├── 02_sales_analysis.ipynb  # 销售额分析
-│   ├── 03_time_analysis.ipynb   # 时间维度分析
+│   ├── 01_data_cleaning.ipynb    # 数据清洗
+│   ├── 02_sales_analysis.ipynb   # 销售额分析
+│   ├── 03_time_analysis.ipynb    # 时间维度分析
 │   ├── 04_product_user_analysis.ipynb  # 商品用户分析
-│   └── 05_visualization.ipynb   # 可视化看板
+│   └── 05_visualization.ipynb    # 可视化看板
 ├── sql/
-│   ├── 01_create_table.sql      # 建库建表语句
-│   ├── 02_import_data.sql       # CSV 数据导入
-│   └── 03_analysis.sql          # 留存分析 + RFM 分层
-├── output/
-│   ├── 03_daily_sales.csv
-│   ├── 03_hourly_orders.csv
-│   ├── 03_weekday_sales.csv
-│   ├── 04_product_orders.csv
-│   ├── 04_product_sales.csv
-│   ├── 04_user_spending.csv
-│   ├── 05_01_商品销售额TOP10.png
-│   ├── 05_02_平台销售额占比.png
-│   ├── 05_03_每日销售趋势.png
-│   ├── 05_04_用户消费TOP10.png
-│   ├── 05_核心业务分析图.png
-│   ├── 05_核心业务分析图_四合一.png
-│   └── rfm_user_segmentation.png      # RFM 用户分层图
+│   ├── 01_create_table.sql       # 建库建表语句
+│   ├── 02_import_data.sql        # CSV 数据导入
+│   └── 03_analysis.sql           # 留存分析 + RFM 分层
 ├── .gitignore
 ├── README.md
 └── requirements.txt
@@ -154,47 +163,34 @@ ecommerce_analysis/
 
 ---
 
-## 📈 可视化成果
-
-### Python 可视化
-
-| 图表 | 说明 |
-|------|------|
-| ![商品销售额TOP10](output/05_01_商品销售额TOP10.png) | 商品销售排行榜，带数值标签 |
-| ![平台占比](output/05_02_平台销售额占比.png) | 渠道占比饼图，无小数值干扰 |
-| ![日销趋势](output/05_03_每日销售趋势.png) | 原始数据+7日均线，看清大方向 |
-| ![用户消费](output/05_04_用户消费TOP10.png) | 高价值用户挖掘 |
-| ![四合一总览](output/05_核心业务分析图_四合一.png) | 业务看板总览 |
-
-### SQL 分析结果
-
-| 图表 | 说明 |
-|------|------|
-| ![RFM用户分层](output/rfm_user_segmentation.png) | RFM 模型用户分层：重要价值/重要发展/重要保持/流失/一般用户分布 |
-
----
-
 ## 🚀 运行方式
+
+### 方式一：在线体验（推荐）
+直接访问 [在线演示](https://ecommerce-analysis-system.streamlit.app)，无需本地部署。
+
+### 方式二：本地运行
 
 ```bash
 # 1. 克隆项目
 git clone https://github.com/2681107509-dev/ecommerce-analysis-system.git
 cd ecommerce_analysis
 
-# 2. 安装依赖
+# 2. 创建虚拟环境
+python -m venv .venv
+.venv\Scripts\activate  # Windows
+# source .venv/bin/activate  # Mac/Linux
+
+# 3. 安装依赖
 pip install -r requirements.txt
 
-# 3. 运行 Jupyter Notebook
+# 4. 启动 BI 看板
+streamlit run app/bi_dashboard.py
+
+# 5. 运行 Jupyter Notebook（可选）
 jupyter notebook
+# 按顺序运行 notebook/ 下的分析文件
 
-# 4. 按顺序打开并运行 notebook
-# 01_data_cleaning.ipynb
-# 02_sales_analysis.ipynb
-# 03_time_analysis.ipynb
-# 04_product_user_analysis.ipynb
-# 05_visualization.ipynb
-
-# 5. SQL 分析（需 MySQL 环境）
+# 6. SQL 分析（需 MySQL 环境）
 # 依次执行 sql/ 文件夹中的脚本
 # 01_create_table.sql → 02_import_data.sql → 03_analysis.sql
 ```
@@ -204,13 +200,25 @@ jupyter notebook
 ## 📝 依赖清单
 
 ```
-pandas>=1.3.0
-matplotlib>=3.4.0
-numpy>=1.21.0
-openpyxl>=3.0.0
-pymysql
+pandas>=2.0.0
+numpy>=1.24.0
+matplotlib>=3.7.0
+plotly>=5.15.0
+streamlit>=1.28.0
+jupyter>=1.0.0
+openpyxl>=3.1.0
+pymysql>=1.1.0
 ```
 
 ---
 
-> 💡 **项目亮点**：完整的数据分析流程（Python + SQL）、工程化的文件命名、规范的 Git 提交、用户留存与 RFM 分层分析、清晰的业务洞察输出。
+## ✅ 安全检查
+
+- [x] 无硬编码 API Key
+- [x] 无密码或敏感信息
+- [x] 无个人隐私数据
+- [x] 依赖清单完整
+
+---
+
+> 💡 **项目亮点**：完整的数据分析流程（Python + SQL）、交互式 BI 看板（Streamlit）、工程化的文件命名、规范的 Git 提交、用户留存与 RFM 分层分析、清晰的业务洞察输出、在线演示支持。
