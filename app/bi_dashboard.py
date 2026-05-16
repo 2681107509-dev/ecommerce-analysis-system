@@ -227,41 +227,41 @@ with col_chart1:
 
 if col_chart2:
     with col_chart2:
-    platform_sales = filtered_df.groupby('平台类型')['付款金额'].sum().reset_index()
-    total_platform_sales = platform_sales['付款金额'].sum()
-    platform_sales['占比'] = platform_sales['付款金额'] / total_platform_sales * 100
-    
-    major_platforms = platform_sales[platform_sales['占比'] >= 3].copy()
-    minor_platforms = platform_sales[platform_sales['占比'] < 3].copy()
-    
-    if len(minor_platforms) > 0:
-        other_sales = minor_platforms['付款金额'].sum()
-        other_row = pd.DataFrame({
-            '平台类型': ['其他'],
-            '付款金额': [other_sales],
-            '占比': [other_sales / total_platform_sales * 100]
-        })
-        major_platforms = pd.concat([major_platforms, other_row], ignore_index=True)
-    
-    hole_size = 0.3 if len(major_platforms) > 1 else 0
-    
-    fig_pie = px.pie(
-        major_platforms,
-        values='付款金额',
-        names='平台类型',
-        hole=hole_size,
-        color_discrete_sequence=px.colors.qualitative.Set2
-    )
-    fig_pie.update_traces(
-        textposition='outside',
-        textinfo='percent+label',
-        textfont=dict(size=11)
-    )
-    fig_pie.update_layout(
-        showlegend=True,
-        margin=dict(t=60, b=60, l=60, r=80)
-    )
-    st.plotly_chart(fig_pie, use_container_width=True)
+        platform_sales = filtered_df.groupby('平台类型')['付款金额'].sum().reset_index()
+        total_platform_sales = platform_sales['付款金额'].sum()
+        platform_sales['占比'] = platform_sales['付款金额'] / total_platform_sales * 100
+        
+        major_platforms = platform_sales[platform_sales['占比'] >= 3].copy()
+        minor_platforms = platform_sales[platform_sales['占比'] < 3].copy()
+        
+        if len(minor_platforms) > 0:
+            other_sales = minor_platforms['付款金额'].sum()
+            other_row = pd.DataFrame({
+                '平台类型': ['其他'],
+                '付款金额': [other_sales],
+                '占比': [other_sales / total_platform_sales * 100]
+            })
+            major_platforms = pd.concat([major_platforms, other_row], ignore_index=True)
+        
+        hole_size = 0.3 if len(major_platforms) > 1 else 0
+        
+        fig_pie = px.pie(
+            major_platforms,
+            values='付款金额',
+            names='平台类型',
+            hole=hole_size,
+            color_discrete_sequence=px.colors.qualitative.Set2
+        )
+        fig_pie.update_traces(
+            textposition='outside',
+            textinfo='percent+label',
+            textfont=dict(size=11)
+        )
+        fig_pie.update_layout(
+            showlegend=True,
+            margin=dict(t=60, b=60, l=60, r=80)
+        )
+        st.plotly_chart(fig_pie, use_container_width=True)
 
 # 第二行：24小时下单分布 + RFM 用户分层
 st.subheader("⏰ 用户行为分析")
