@@ -2,7 +2,7 @@
 
 ## 🌐 在线演示
 
-**BI 数据看板**：[https://ecommerce-analysis-system.streamlit.app](https://ecommerce-analysis-system.streamlit.app)
+**BI 数据看板**：[https://ecommerce-analysis-system-cqd8tpywoxneg8n3wqexfm.streamlit.app](https://ecommerce-analysis-system-cqd8tpywoxneg8n3wqexfm.streamlit.app)
 
 > 点击上方链接即可在线体验完整的数据分析看板，无需本地部署！
 
@@ -166,7 +166,7 @@ ecommerce_analysis/
 ## 🚀 运行方式
 
 ### 方式一：在线体验（推荐）
-直接访问 [在线演示](https://ecommerce-analysis-system.streamlit.app)，无需本地部署。
+直接访问 [在线演示](https://ecommerce-analysis-system-cqd8tpywoxneg8n3wqexfm.streamlit.app)，无需本地部署。
 
 ### 方式二：本地运行
 
