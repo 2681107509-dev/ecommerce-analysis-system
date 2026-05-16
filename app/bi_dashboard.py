@@ -31,10 +31,11 @@ def load_data():
 
 try:
     df = load_data()
-    st.success(f"✅ 成功加载 {len(df):,} 条订单数据")
 except Exception as e:
     st.error(f"❌ 数据加载失败：{e}")
     st.stop()
+
+st.toast(f"✅ 已加载 {len(df):,} 条订单数据", icon="📊")
 
 # ========== 侧边栏筛选器 ==========
 st.sidebar.header("🔍 筛选条件")
@@ -126,8 +127,13 @@ col3.metric(
 col4, col5, col6 = st.columns(3)
 
 if has_data and total_orders > 0:
-    delta_color = "normal" if avg_order_value >= overall_avg else "inverse"
-    price_delta = f"较全站均值{'↑' if avg_order_value >= overall_avg else '↓'}{abs(avg_order_value-overall_avg)/overall_avg*100:.1f}%"
+    diff_pct = abs(avg_order_value - overall_avg) / overall_avg * 100
+    if diff_pct < 0.1:
+        price_delta = "与均值持平"
+        delta_color = "off"
+    else:
+        delta_color = "normal" if avg_order_value >= overall_avg else "inverse"
+        price_delta = f"较全站均值{'↑' if avg_order_value >= overall_avg else '↓'}{diff_pct:.1f}%"
 else:
     delta_color = "off"
     price_delta = None
@@ -188,10 +194,14 @@ with col_chart1:
             arrowhead=2,
             arrowsize=1,
             arrowwidth=2,
-            arrowcolor='#ff6b6b',
+            arrowcolor='rgba(255,107,107,0.8)',
             ax=40,
             ay=-40,
-            font=dict(size=11, color='#ff6b6b')
+            font=dict(size=11, color='#ff6b6b'),
+            bgcolor='rgba(255,255,255,0.9)',
+            bordercolor='#ff6b6b',
+            borderwidth=1,
+            borderpad=4
         )
         
         fig_line.update_layout(
@@ -376,7 +386,7 @@ with col_user:
         yaxis_title="用户",
         xaxis=dict(ticksuffix="元"),
         coloraxis_colorbar=dict(title="消费金额 (元)"),
-        margin=dict(t=30, b=30, l=100, r=150),
+        margin=dict(t=30, b=30, l=100, r=160),
         bargroupgap=0.1
     )
     fig_user.update_traces(
@@ -388,4 +398,4 @@ with col_user:
 
 # 底部信息
 st.markdown("---")
-st.caption(f"数据更新时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | 数据来源：cleaned_orders.csv")
+st.caption(f"📅 数据更新时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | 📊 数据来源：电商订单系统")
