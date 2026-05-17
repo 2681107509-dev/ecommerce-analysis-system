@@ -26,30 +26,24 @@ def load_data():
         data_path,
         parse_dates=['下单时间', '付款时间']
     )
-    df['平台类型'] = df['平台类型'].replace({'AP': 'APP', 'Web': 'Web网站'})
     return df
 
 try:
     df = load_data()
+    st.success(f"✅ 成功加载 {len(df):,} 条订单数据")
 except Exception as e:
     st.error(f"❌ 数据加载失败：{e}")
     st.stop()
-
-st.toast(f"✅ 已加载 {len(df):,} 条订单数据", icon="📊")
 
 # ========== 侧边栏筛选器 ==========
 st.sidebar.header("🔍 筛选条件")
 
 # 平台筛选
 platforms = st.sidebar.multiselect(
-    "选择平台 *",
+    "选择平台",
     options=df['平台类型'].unique(),
-    default=df['平台类型'].unique(),
-    placeholder="请至少选择一个平台"
+    default=df['平台类型'].unique()
 )
-
-if len(platforms) == 0:
-    st.sidebar.error("⚠️ 请至少选择一个平台")
 
 # 日期范围
 min_date = df['下单时间'].min().date()
@@ -76,353 +70,108 @@ else:
 
 # ========== 核心指标卡 ==========
 st.subheader("📊 核心指标")
+col1, col2, col3, col4 = st.columns(4)
 
-has_data = len(filtered_df) > 0
-
-total_sales = filtered_df['付款金额'].sum() if has_data else 0
-total_orders = filtered_df['订单号'].nunique() if has_data else 0
-total_users = filtered_df['用户名'].nunique() if has_data else 0
-unique_days = len(filtered_df['下单时间'].dt.date.unique()) if has_data else 0
-
+total_sales = filtered_df['付款金额'].sum()
+total_orders = filtered_df['订单号'].nunique()
+total_users = filtered_df['用户名'].nunique()
 avg_order_value = total_sales / total_orders if total_orders > 0 else 0
-
-if has_data and total_users > 0:
-    user_order_counts = filtered_df.groupby('用户名')['订单号'].nunique()
-    repeat_users = (user_order_counts > 1).sum()
-    repeat_rate = repeat_users / total_users * 100
-else:
-    repeat_users = 0
-    repeat_rate = 0
-
-refund_count = (filtered_df['是否退款'] == '是').sum() if has_data else 0
-refund_rate = refund_count / total_orders * 100 if total_orders > 0 else 0
-
-overall_avg = df['付款金额'].mean()
-
-col1, col2, col3 = st.columns(3)
-
-if has_data and unique_days > 0:
-    daily_avg = f"日均 ¥{total_sales/unique_days:,.0f}"
-else:
-    daily_avg = None
 
 col1.metric(
     label="💰 总销售额",
-    value=f"¥{total_sales:,.0f}" if has_data else "-",
-    delta=daily_avg
+    value=f"¥{total_sales:,.2f}",
+    delta=f"¥{total_sales/len(filtered_df['下单时间'].dt.date.unique()):,.0f}/天"
 )
 
 col2.metric(
     label="📦 总订单数",
-    value=f"{total_orders:,}" if has_data else "-",
-    delta=f"人均 {total_orders/total_users:.1f} 单" if has_data and total_users > 0 else None
+    value=f"{total_orders:,}",
+    delta=f"平均每用户 {total_orders/total_users:.1f} 单" if total_users > 0 else "0"
 )
 
 col3.metric(
     label="👥 活跃用户",
-    value=f"{total_users:,}" if has_data else "-",
-    delta=f"占全量 {total_users/df['用户名'].nunique()*100:.1f}%" if has_data and df['用户名'].nunique() > 0 else None
+    value=f"{total_users:,}",
+    delta=f"占比 {total_users/df['用户名'].nunique()*100:.1f}%" if df['用户名'].nunique() > 0 else "0%"
 )
-
-col4, col5, col6 = st.columns(3)
-
-if has_data and total_orders > 0:
-    diff_pct = abs(avg_order_value - overall_avg) / overall_avg * 100
-    if diff_pct < 0.1:
-        price_delta = "与均值持平"
-        delta_color = "off"
-    else:
-        delta_color = "normal" if avg_order_value >= overall_avg else "inverse"
-        price_delta = f"较全站均值{'↑' if avg_order_value >= overall_avg else '↓'}{diff_pct:.1f}%"
-else:
-    delta_color = "off"
-    price_delta = None
 
 col4.metric(
     label="💵 客单价",
-    value=f"¥{avg_order_value:,.0f}" if has_data and total_orders > 0 else "-",
-    delta=price_delta,
-    delta_color=delta_color
-)
-
-col5.metric(
-    label="🔄 复购率",
-    value=f"{repeat_rate:.1f}%" if has_data else "-",
-    delta="无复购" if has_data and repeat_users == 0 else (f"{repeat_users:,} 人复购" if has_data else None),
-    delta_color="off" if has_data and repeat_users == 0 else "normal"
-)
-
-col6.metric(
-    label="↩️ 退款率",
-    value=f"{refund_rate:.2f}%" if has_data else "-",
-    delta=f"{refund_count:,} 笔退款" if has_data else None,
-    delta_color="inverse"
+    value=f"¥{avg_order_value:.2f}",
+    delta="较总体" + ("↑" if avg_order_value > df['付款金额'].mean() else "↓")
 )
 
 st.markdown("---")
 
 # ========== 图表区域 ==========
-# 第一行：每日销售趋势 + 平台占比
+# 图1：每日销售趋势
 st.subheader("📈 每日销售趋势")
-
-show_pie = len(platforms) > 1
-
-if show_pie:
-    col_chart1, col_chart2 = st.columns([2, 1])
-else:
-    col_chart1 = st.container()
-    col_chart2 = None
+col_chart1, col_chart2 = st.columns([2, 1])
 
 with col_chart1:
     daily_sales = filtered_df.groupby(filtered_df['下单时间'].dt.date)['付款金额'].sum().reset_index()
     daily_sales.columns = ['日期', '销售额']
     
-    if len(daily_sales) > 0:
-        fig_line = px.line(
-            daily_sales,
-            x='日期',
-            y='销售额',
-            markers=True,
-            template="plotly_white"
-        )
-        fig_line.update_traces(
-            line=dict(width=2.5, color='#00d4ff'),
-            marker=dict(size=6, color='#00d4ff')
-        )
-        
-        max_idx = daily_sales['销售额'].idxmax()
-        max_date = daily_sales.loc[max_idx, '日期']
-        max_sales = daily_sales.loc[max_idx, '销售额']
-        
-        fig_line.add_annotation(
-            x=max_date,
-            y=max_sales,
-            text=f"峰值: ¥{max_sales:,.0f}",
-            showarrow=True,
-            arrowhead=2,
-            arrowsize=1,
-            arrowwidth=2,
-            arrowcolor='rgba(255,107,107,0.8)',
-            ax=40,
-            ay=-40,
-            font=dict(size=12, color='#ffffff'),
-            bgcolor='rgba(0,0,0,0.75)',
-            bordercolor='rgba(255,107,107,0.6)',
-            borderwidth=1,
-            borderpad=6
-        )
-        
-        fig_line.update_layout(
-            hovermode='x unified',
-            xaxis=dict(
-                tickformat='%Y-%m-%d',
-                tickangle=45,
-                nticks=min(len(daily_sales), 10)
-            ),
-            plot_bgcolor='rgba(0,0,0,0.03)'
-        )
-        st.plotly_chart(fig_line, use_container_width=True)
-    else:
-        st.warning("⚠️ 当前筛选条件下无数据")
-
-if col_chart2:
-    with col_chart2:
-        platform_sales = filtered_df.groupby('平台类型')['付款金额'].sum().reset_index()
-        total_platform_sales = platform_sales['付款金额'].sum()
-        platform_sales['占比'] = platform_sales['付款金额'] / total_platform_sales * 100
-        
-        major_platforms = platform_sales[platform_sales['占比'] >= 3].copy()
-        minor_platforms = platform_sales[platform_sales['占比'] < 3].copy()
-        
-        if len(minor_platforms) > 0:
-            other_sales = minor_platforms['付款金额'].sum()
-            other_row = pd.DataFrame({
-                '平台类型': ['其他'],
-                '付款金额': [other_sales],
-                '占比': [other_sales / total_platform_sales * 100]
-            })
-            major_platforms = pd.concat([major_platforms, other_row], ignore_index=True)
-        
-        hole_size = 0.3 if len(major_platforms) > 1 else 0
-        
-        fig_pie = px.pie(
-            major_platforms,
-            values='付款金额',
-            names='平台类型',
-            hole=hole_size,
-            color_discrete_sequence=px.colors.qualitative.Set2
-        )
-        fig_pie.update_traces(
-            textposition='outside',
-            textinfo='percent+label',
-            textfont=dict(size=11)
-        )
-        fig_pie.update_layout(
-            showlegend=True,
-            margin=dict(t=60, b=60, l=60, r=80)
-        )
-        st.plotly_chart(fig_pie, use_container_width=True)
-
-# 第二行：24小时下单分布 + RFM 用户分层
-st.subheader("⏰ 用户行为分析")
-col_time, col_rfm = st.columns(2)
-
-with col_time:
-    hourly_orders = filtered_df.groupby(filtered_df['下单时间'].dt.hour)['订单号'].nunique().reset_index()
-    hourly_orders.columns = ['小时', '订单数']
-    
-    fig_hour = px.bar(
-        hourly_orders,
-        x='小时',
-        y='订单数',
-        color='订单数',
-        color_continuous_scale='Blues'
+    fig_line = px.line(
+        daily_sales,
+        x='日期',
+        y='销售额',
+        markers=True,
+        title="每日销售额变化趋势",
+        template="plotly_white"
     )
-    fig_hour.update_layout(
-        title="24小时下单分布",
-        xaxis_title="小时",
-        yaxis_title="订单数",
-        xaxis=dict(
-            tickmode='array',
-            tickvals=[0, 6, 12, 18, 23],
-            ticktext=['0点', '6点', '12点', '18点', '23点']
-        ),
-        showlegend=False
-    )
-    fig_hour.update_traces(showlegend=False)
-    st.plotly_chart(fig_hour, use_container_width=True)
+    fig_line.update_traces(line=dict(width=3, color='#1f77b4'))
+    fig_line.update_layout(hovermode='x unified')
+    st.plotly_chart(fig_line, use_container_width=True)
 
-with col_rfm:
-    user_rfm = filtered_df.groupby('用户名').agg({
-        '下单时间': lambda x: (filtered_df['下单时间'].max() - x.max()).days,
-        '订单号': 'nunique',
-        '付款金额': 'sum'
-    }).reset_index()
-    user_rfm.columns = ['用户名', 'R', 'F', 'M']
+# 图2：平台占比
+with col_chart2:
+    platform_sales = filtered_df.groupby('平台类型')['付款金额'].sum().reset_index()
     
-    def rfm_segment(row):
-        if row['R'] <= 30 and row['F'] >= 2 and row['M'] >= 2000:
-            return '重要价值用户'
-        elif row['R'] <= 30 and row['F'] >= 2:
-            return '重要发展用户'
-        elif row['R'] > 180 and row['M'] >= 2000:
-            return '重要保持用户'
-        elif row['R'] > 180 and row['F'] == 1:
-            return '流失用户'
-        else:
-            return '一般用户'
-    
-    user_rfm['用户分层'] = user_rfm.apply(rfm_segment, axis=1)
-    rfm_counts = user_rfm['用户分层'].value_counts().reset_index()
-    rfm_counts.columns = ['用户分层', '人数']
-    
-    segment_order = ['重要价值用户', '重要发展用户', '重要保持用户', '一般用户', '流失用户']
-    rfm_counts['用户分层'] = pd.Categorical(rfm_counts['用户分层'], categories=segment_order, ordered=True)
-    rfm_counts = rfm_counts.sort_values('用户分层')
-    
-    total_rfm = rfm_counts['人数'].sum()
-    rfm_counts['占比'] = rfm_counts['人数'] / total_rfm * 100
-    
-    fig_rfm = px.pie(
-        rfm_counts,
-        values='人数',
-        names='用户分层',
+    fig_pie = px.pie(
+        platform_sales,
+        values='付款金额',
+        names='平台类型',
+        title="平台销售占比",
         hole=0.4,
-        color_discrete_sequence=px.colors.qualitative.Set2
+        color_discrete_sequence=px.colors.qualitative.Set3
     )
-    
-    custom_labels = []
-    for _, row in rfm_counts.iterrows():
-        if row['占比'] >= 2:
-            custom_labels.append(f"{row['占比']:.1f}%<br>{row['用户分层']}")
-        else:
-            custom_labels.append("")
-    
-    fig_rfm.update_traces(
-        textposition='outside',
-        text=custom_labels,
-        textfont=dict(size=11),
-        marker=dict(
-            line=dict(color='white', width=1)
-        )
-    )
-    
-    fig_rfm.update_layout(
-        showlegend=True,
-        margin=dict(t=60, b=60, l=60, r=80),
-        width=400,
-        height=350
-    )
-    st.plotly_chart(fig_rfm, use_container_width=True)
-    
-    churn_rate = rfm_counts[rfm_counts['用户分层'] == '流失用户']['人数'].sum() / rfm_counts['人数'].sum() * 100
-    
-    if churn_rate < 5:
-        insight = f"💡 用户留存极佳（流失率仅 {churn_rate:.1f}%），建议通过会员权益维持活跃度"
-    elif churn_rate < 20:
-        insight = f"💡 流失用户占比 {churn_rate:.1f}%，建议通过优惠券激活召回"
-    else:
-        insight = f"⚠️ 流失用户占比高达 {churn_rate:.1f}%，需紧急启动召回营销活动"
-    
-    st.info(insight)
+    fig_pie.update_traces(textposition='inside', textinfo='percent+label')
+    st.plotly_chart(fig_pie, use_container_width=True)
 
-# 第三行：商品 TOP10 + 用户 TOP10
-col_product, col_user = st.columns(2)
+# 图3：商品 TOP10
+st.subheader("🏆 商品销售额 TOP10")
+top_products = filtered_df.groupby('商品编号')['付款金额'].sum().nlargest(10).reset_index()
 
-with col_product:
-    st.subheader("🏆 商品销售额 TOP10")
-    top_products = filtered_df.groupby('商品编号')['付款金额'].sum().nlargest(10).reset_index()
-    
-    fig_bar = px.bar(
-        top_products,
-        x='商品编号',
-        y='付款金额',
-        color='付款金额',
-        color_continuous_scale='Reds'
-    )
-    fig_bar.update_layout(
-        xaxis_title="商品编号",
-        yaxis_title="销售额 (元)",
-        yaxis=dict(ticksuffix="元"),
-        coloraxis_colorbar=dict(title="销售额 (元)"),
-        xaxis_tickangle=-30
-    )
-    fig_bar.update_traces(
-        texttemplate='%{y:,.0f}元',
-        textposition='outside',
-        hovertemplate='商品: %{x}<br>销售额: ¥%{y:,.0f}<extra></extra>'
-    )
-    st.plotly_chart(fig_bar, use_container_width=True)
+fig_bar = px.bar(
+    top_products,
+    x='商品编号',
+    y='付款金额',
+    title="销售额 TOP10 商品",
+    color='付款金额',
+    color_continuous_scale='Reds'
+)
+fig_bar.update_layout(xaxis_title="商品编号", yaxis_title="销售额 (元)")
+fig_bar.update_traces(texttemplate='%{y:.0f}', textposition='outside')
+st.plotly_chart(fig_bar, use_container_width=True)
 
-with col_user:
-    st.subheader("👑 用户消费 TOP10")
-    top_users = filtered_df.groupby('用户名')['付款金额'].sum().nlargest(10).reset_index()
-    top_users = top_users.sort_values('付款金额', ascending=False)
-    
-    fig_user = px.bar(
-        top_users,
-        x='付款金额',
-        y='用户名',
-        orientation='h',
-        color='付款金额',
-        color_continuous_scale='Viridis'
-    )
-    fig_user.update_layout(
-        xaxis_title="消费金额 (元)",
-        yaxis_title="",
-        xaxis=dict(ticksuffix="元"),
-        coloraxis_colorbar=dict(title="消费金额 (元)"),
-        margin=dict(t=30, b=30, l=120, r=160),
-        bargroupgap=0.1,
-        yaxis=dict(autorange="reversed")
-    )
-    fig_user.update_traces(
-        texttemplate='%{x:,.0f}',
-        textposition='outside',
-        cliponaxis=False
-    )
-    st.plotly_chart(fig_user, use_container_width=True)
+# 图4：用户消费 TOP10
+st.subheader("👑 用户消费 TOP10")
+top_users = filtered_df.groupby('用户名')['付款金额'].sum().nlargest(10).reset_index()
+
+fig_user = px.bar(
+    top_users,
+    x='付款金额',
+    y='用户名',
+    orientation='h',
+    title="消费金额 TOP10 用户",
+    color='付款金额',
+    color_continuous_scale='Viridis'
+)
+fig_user.update_layout(xaxis_title="消费金额 (元)", yaxis_title="用户")
+fig_user.update_traces(texttemplate='%{x:.0f}', textposition='outside')
+st.plotly_chart(fig_user, use_container_width=True)
 
 # 底部信息
 st.markdown("---")
-st.caption(f"📅 数据更新时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | 📊 数据来源：电商订单系统")
+st.caption(f"数据更新时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | 数据来源：cleaned_orders.csv")
