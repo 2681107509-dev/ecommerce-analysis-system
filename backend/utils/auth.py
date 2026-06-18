@@ -63,19 +63,20 @@ def decode_token(token: str) -> Optional[TokenData]:
         return None
 
 
-DEFAULT_USERS: dict[str, str] = {
-    # P6.10 修复：原 hash 是占位字符串，bcrypt.checkpw 会报 Invalid salt，
-    # 导致 admin / analyst 永远登录失败。下面是 admin/admin123 和 analyst/analyst123 的真实 bcrypt 哈希。
-    "admin": "$2b$12$Vpo/SiCdZ86UqoEb5xad1OqWTL0A2VDz1r8UZVECQHcqFHXPYyMDy",
-    "analyst": "$2b$12$k1FZZJiYActq4Qux4iRwlucY99Ce5Ow4XIlvvB4bd4ZmkfgfmA0ta",
-}
+def _configured_users() -> dict[str, str]:
+    users = {settings.admin_username: settings.admin_password}
+    if settings.analyst_password:
+        users[settings.analyst_username] = settings.analyst_password
+    return users
 
 
 def authenticate_user(username: str, password: str) -> bool:
-    stored_hash = DEFAULT_USERS.get(username)
-    if not stored_hash:
+    stored_password = _configured_users().get(username)
+    if not stored_password:
         return False
-    return verify_password(password, stored_hash)
+    if stored_password.startswith(("$2a$", "$2b$", "$2y$")):
+        return verify_password(password, stored_password)
+    return secrets.compare_digest(password, stored_password)
 
 
 def generate_api_key() -> str:

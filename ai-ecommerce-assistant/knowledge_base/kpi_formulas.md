@@ -17,7 +17,7 @@ WHERE payment_amount > 0
 ```sql
 SELECT order_date,
        SUM(payment_amount) AS daily_sales,
-       COUNT(DISTINCT order_no) AS daily_orders
+       COUNT(DISTINCT order_id) AS daily_orders
 FROM orders
 WHERE payment_amount > 0
 GROUP BY order_date
@@ -47,7 +47,7 @@ WHERE payment_amount > 0
 ### 2.2 复购率
 ```sql
 WITH user_orders AS (
-  SELECT user_name, COUNT(DISTINCT order_no) AS cnt
+  SELECT user_name, COUNT(DISTINCT order_id) AS cnt
   FROM orders
   WHERE payment_amount > 0
   GROUP BY user_name
@@ -68,7 +68,7 @@ SELECT
   END AS freq_band,
   COUNT(*) AS user_count
 FROM (
-  SELECT user_name, COUNT(DISTINCT order_no) AS cnt
+  SELECT user_name, COUNT(DISTINCT order_id) AS cnt
   FROM orders WHERE payment_amount > 0
   GROUP BY user_name
 ) t
@@ -79,7 +79,7 @@ GROUP BY freq_band
 
 ### 3.1 客单价
 ```sql
-SELECT SUM(payment_amount) / COUNT(DISTINCT order_no) AS avg_order_value
+SELECT SUM(payment_amount) / COUNT(DISTINCT order_id) AS avg_order_value
 FROM orders
 WHERE payment_amount > 0
   AND order_date BETWEEN '2025-01-01' AND '2025-12-31'
@@ -95,7 +95,7 @@ SELECT
     WHEN payment_amount < 1500 THEN '500-1500元'
     ELSE '1500元以上'
   END AS price_band,
-  COUNT(DISTINCT order_no) AS order_count
+  COUNT(DISTINCT order_id) AS order_count
 FROM orders
 WHERE payment_amount > 0
 GROUP BY price_band
@@ -106,7 +106,7 @@ GROUP BY price_band
 ### 4.1 退款率
 ```sql
 SELECT 
-  SUM(CASE WHEN is_refunded = '是' THEN 1 ELSE 0 END) * 100.0
+  SUM(CASE WHEN is_refund = '是' THEN 1 ELSE 0 END) * 100.0
   / COUNT(*) AS refund_rate
 FROM orders
 ```
@@ -115,8 +115,8 @@ FROM orders
 ```sql
 SELECT platform_type,
        COUNT(*) AS total_orders,
-       SUM(CASE WHEN is_refunded = '是' THEN 1 ELSE 0 END) AS refund_orders,
-       SUM(CASE WHEN is_refunded = '是' THEN 1 ELSE 0 END) * 100.0 / COUNT(*) AS refund_rate
+       SUM(CASE WHEN is_refund = '是' THEN 1 ELSE 0 END) AS refund_orders,
+       SUM(CASE WHEN is_refund = '是' THEN 1 ELSE 0 END) * 100.0 / COUNT(*) AS refund_rate
 FROM orders
 GROUP BY platform_type
 ```
@@ -124,7 +124,7 @@ GROUP BY platform_type
 ### 4.3 退款金额占比
 ```sql
 SELECT 
-  SUM(CASE WHEN is_refunded = '是' THEN payment_amount ELSE 0 END)
+  SUM(CASE WHEN is_refund = '是' THEN payment_amount ELSE 0 END)
   / NULLIF(SUM(payment_amount), 0) AS refund_amount_ratio
 FROM orders
 WHERE payment_amount > 0
@@ -146,8 +146,8 @@ ORDER BY sales DESC
 ### 5.2 平台客单价对比
 ```sql
 SELECT platform_type,
-       SUM(payment_amount) / COUNT(DISTINCT order_no) AS aov,
-       COUNT(DISTINCT order_no) AS orders
+       SUM(payment_amount) / COUNT(DISTINCT order_id) AS aov,
+       COUNT(DISTINCT order_id) AS orders
 FROM orders
 WHERE payment_amount > 0
 GROUP BY platform_type
@@ -159,7 +159,7 @@ GROUP BY platform_type
 ```sql
 SELECT order_hour,
        SUM(payment_amount) AS sales,
-       COUNT(DISTINCT order_no) AS orders
+       COUNT(DISTINCT order_id) AS orders
 FROM orders
 WHERE payment_amount > 0
 GROUP BY order_hour
@@ -170,7 +170,7 @@ ORDER BY order_hour
 ```sql
 SELECT weekday,
        SUM(payment_amount) AS sales,
-       COUNT(DISTINCT order_no) AS orders
+       COUNT(DISTINCT order_id) AS orders
 FROM orders
 WHERE payment_amount > 0
 GROUP BY weekday
@@ -191,7 +191,7 @@ LIMIT 10
 
 ### 7.2 订单数 TOP 10 用户
 ```sql
-SELECT user_name, COUNT(DISTINCT order_no) AS order_count
+SELECT user_name, COUNT(DISTINCT order_id) AS order_count
 FROM orders
 WHERE payment_amount > 0
 GROUP BY user_name
@@ -205,7 +205,7 @@ LIMIT 10
 ```sql
 SELECT user_name,
        DATEDIFF('2025-12-31', MAX(order_date)) AS recency_days,
-       COUNT(DISTINCT order_no) AS frequency,
+       COUNT(DISTINCT order_id) AS frequency,
        SUM(payment_amount) AS monetary
 FROM orders
 WHERE payment_amount > 0
@@ -214,7 +214,7 @@ GROUP BY user_name
 
 ### 8.2 RFM 分层（8 类）
 ```sql
--- 在 8.1 基础上加分位打分，再按 阈值 R<=30, F>=2, M>=1500 分层
+-- 在 8.1 基础上做分位评分：R 低分为近期活跃，F/M 高分为高频/高消费
 -- 完整实现见 backend/services/rfm_service.py
 ```
 

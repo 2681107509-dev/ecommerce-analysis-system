@@ -40,3 +40,8 @@ ai-ecommerce-assistant/data/
 # 评估报告产物（保留 gold_qa.jsonl + run_eval.py 即可）
 ai-ecommerce-assistant/eval/report.md
 ai-ecommerce-assistant/eval/report.json
+
+# 本地运行与接口调试产物
+logs/
+test_*.json
+-w

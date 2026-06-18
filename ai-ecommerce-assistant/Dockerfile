@@ -1,15 +1,17 @@
-FROM python:3.11-slim
+FROM python:3.12-slim
 
-WORKDIR /app
+WORKDIR /app/ai-ecommerce-assistant
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY ai-ecommerce-assistant/requirements.txt .
+RUN python -m pip install --no-cache-dir --upgrade "pip>=26.1.2" \
+    && pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+COPY backend/ /app/backend/
+COPY ai-ecommerce-assistant/ ./
 
 EXPOSE 8502
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD python -c "import httpx; httpx.get('http://localhost:8502/_stcore/health')" || exit 1
+    CMD python -c "import httpx; r=httpx.get('http://localhost:8502/ai/_stcore/health'); r.raise_for_status()" || exit 1
 
 CMD ["streamlit", "run", "app.py", "--server.port=8502", "--server.address=0.0.0.0", "--server.headless=true"]

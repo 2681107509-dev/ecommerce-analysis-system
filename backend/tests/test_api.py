@@ -1,4 +1,3 @@
-import asyncio
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
@@ -72,6 +71,18 @@ class TestSystem:
         assert "/api/orders" in schema["paths"]
         assert "/api/analytics/sales-overview" in schema["paths"]
 
+    @pytest.mark.asyncio
+    async def test_public_monitor_aliases(self, client: AsyncClient):
+        health = await client.get("/health/detailed")
+        metrics = await client.get("/metrics")
+        services = await client.get("/api/monitor/services-status")
+
+        assert health.status_code == 200
+        assert "checks" in health.json()
+        assert metrics.status_code == 200
+        assert metrics.headers["content-type"].startswith("text/plain")
+        assert services.status_code == 200
+
 
 class TestAuth:
     @pytest.mark.asyncio
@@ -123,7 +134,11 @@ class TestOrders:
 
     @pytest.mark.asyncio
     async def test_get_order_detail(self, authed_client: AsyncClient):
-        r = await authed_client.get("/api/orders/1")
+        listing = await authed_client.get("/api/orders?page_size=1")
+        items = listing.json()["items"]
+        if not items:
+            pytest.skip("测试数据库没有订单数据")
+        r = await authed_client.get(f"/api/orders/{items[0]['id']}")
         assert r.status_code == 200
         assert "order_no" in r.json()
 

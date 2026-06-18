@@ -5,17 +5,23 @@ import asyncio
 from contextlib import asynccontextmanager
 from typing import Callable, Awaitable
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, PlainTextResponse
 
 from backend.config import get_settings
 from backend.database import engine, Base, check_db_connection
 from backend.models.database_models import Order  # noqa: F401 - 注册 ORM 模型
 from backend.routes import orders, products, analytics, ai, export, auth, monitor, rfm
 from backend.routes.monitor import record_request
+from backend.routes.monitor import (
+    detailed_health,
+    render_backend_prometheus,
+    render_rag_prometheus,
+    _load_rag_stats,
+)
 from backend.utils.rate_limiter import check_rate_limit
-from backend.utils.cache import init_redis, check_redis_health, cleanup_memory_cache
+from backend.utils.cache import init_redis, cleanup_memory_cache
 
 logging.basicConfig(
     level=logging.INFO,
@@ -98,7 +104,7 @@ app = FastAPI(
 - 响应缓存（热门查询加速）
 
 ### 技术栈
-FastAPI + SQLAlchemy (async) + MySQL + LangChain + DeepSeek V4 Flash + Pydantic v2
+FastAPI + SQLAlchemy (async) + MySQL + LangChain + DeepSeek + Pydantic v2
     """,
     lifespan=lifespan,
 )
@@ -114,6 +120,13 @@ app.add_middleware(
 _SKIP_RATE_LIMIT_PATHS = ("/docs", "/redoc", "/health", "/health-panel", "/", "/demo", "/openapi.json", "/monitor")
 
 
+def _set_security_headers(response) -> None:
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+
+
 @app.middleware("http")
 async def logging_and_rate_limit_middleware(
     request: Request,
@@ -124,16 +137,23 @@ async def logging_and_rate_limit_middleware(
     if request.url.path in _SKIP_RATE_LIMIT_PATHS:
         response = await call_next(request)
         duration = (time.time() - start) * 1000
+        _set_security_headers(response)
         logger.info(f"{request.method} {request.url.path} - {response.status_code} - {duration:.1f}ms")
         return response
 
     try:
-        limit_info = check_rate_limit(request)
-    except Exception as exc:
-        return JSONResponse(
+        limit_info = check_rate_limit(
+            request,
+            trust_proxy_headers=settings.trust_proxy_headers,
+        )
+    except HTTPException as exc:
+        response = JSONResponse(
             status_code=429,
             content={"error_code": "RATE_LIMITED", "message": str(exc.detail)},
+            headers=exc.headers,
         )
+        _set_security_headers(response)
+        return response
 
     response = await call_next(request)
     duration = (time.time() - start) * 1000
@@ -142,6 +162,7 @@ async def logging_and_rate_limit_middleware(
     response.headers["X-RateLimit-Remaining"] = str(limit_info["remaining"])
     response.headers["X-RateLimit-Reset"] = str(limit_info["reset"])
     response.headers["X-Response-Time"] = f"{duration:.1f}ms"
+    _set_security_headers(response)
 
     record_request(request.url.path, response.status_code, duration)
 
@@ -186,6 +207,24 @@ async def root() -> FileResponse:
 async def health_check() -> dict:
     db_ok = await check_db_connection()
     return {"status": "healthy" if db_ok else "degraded", "database": "connected" if db_ok else "disconnected"}
+
+
+@app.get("/health/detailed", tags=["系统"])
+async def detailed_health_alias() -> dict:
+    """兼容运维工具的公开详细健康检查路径。"""
+    return await detailed_health()
+
+
+@app.get("/metrics", response_class=PlainTextResponse, tags=["系统"])
+async def metrics_alias() -> PlainTextResponse:
+    """公开的 Prometheus 指标路径。"""
+    return PlainTextResponse(
+        content=(
+            render_backend_prometheus()
+            + render_rag_prometheus(_load_rag_stats() or {})
+        ),
+        media_type="text/plain; version=0.0.4",
+    )
 
 
 @app.get("/demo", tags=["体验"])

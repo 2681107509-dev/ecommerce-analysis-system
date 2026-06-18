@@ -61,7 +61,7 @@ WHERE payment_amount > 0
 ### GQ-007: 复购率
 ```sql
 WITH t AS (
-  SELECT user_name, COUNT(DISTINCT order_no) AS cnt
+  SELECT user_name, COUNT(DISTINCT order_id) AS cnt
   FROM orders WHERE payment_amount > 0
   GROUP BY user_name
 )
@@ -82,7 +82,7 @@ LIMIT 10
 ```sql
 SELECT COUNT(*) AS new_user_count
 FROM (
-  SELECT user_name, COUNT(DISTINCT order_no) AS cnt
+  SELECT user_name, COUNT(DISTINCT order_id) AS cnt
   FROM orders WHERE payment_amount > 0
   GROUP BY user_name
   HAVING cnt = 1
@@ -94,14 +94,14 @@ FROM (
 ### GQ-010: 总退款率
 ```sql
 SELECT 
-  SUM(CASE WHEN is_refunded = '是' THEN 1 ELSE 0 END) * 100.0 / COUNT(*) AS refund_rate
+  SUM(CASE WHEN is_refund = '是' THEN 1 ELSE 0 END) * 100.0 / COUNT(*) AS refund_rate
 FROM orders
 ```
 
 ### GQ-011: 哪个平台退款率最高
 ```sql
 SELECT platform_type,
-       SUM(CASE WHEN is_refunded = '是' THEN 1 ELSE 0 END) * 100.0 / COUNT(*) AS rate
+       SUM(CASE WHEN is_refund = '是' THEN 1 ELSE 0 END) * 100.0 / COUNT(*) AS rate
 FROM orders
 GROUP BY platform_type
 ORDER BY rate DESC
@@ -110,16 +110,16 @@ LIMIT 1
 
 ### GQ-012: 退款订单数
 ```sql
-SELECT COUNT(DISTINCT order_no) AS refund_orders
+SELECT COUNT(DISTINCT order_id) AS refund_orders
 FROM orders
-WHERE is_refunded = '是'
+WHERE is_refund = '是'
 ```
 
 ## 客单价类
 
 ### GQ-013: 平台总客单价
 ```sql
-SELECT SUM(payment_amount) / COUNT(DISTINCT order_no) AS aov
+SELECT SUM(payment_amount) / COUNT(DISTINCT order_id) AS aov
 FROM orders
 WHERE payment_amount > 0
 ```
@@ -127,7 +127,7 @@ WHERE payment_amount > 0
 ### GQ-014: 客单价 TOP 10 用户
 ```sql
 SELECT user_name, 
-       SUM(payment_amount) / COUNT(DISTINCT order_no) AS user_aov
+       SUM(payment_amount) / COUNT(DISTINCT order_id) AS user_aov
 FROM orders
 WHERE payment_amount > 0
 GROUP BY user_name
@@ -150,7 +150,7 @@ LIMIT 3
 ### GQ-016: 工作日 vs 周末销售
 ```sql
 SELECT 
-  CASE WHEN weekday IN (5, 6) THEN '周末' ELSE '工作日' END AS day_type,
+  CASE WHEN weekday IN ('Saturday', 'Sunday') THEN '周末' ELSE '工作日' END AS day_type,
   SUM(payment_amount) AS sales
 FROM orders
 WHERE payment_amount > 0
@@ -161,14 +161,14 @@ GROUP BY day_type
 
 ### GQ-017: 总订单数
 ```sql
-SELECT COUNT(DISTINCT order_no) AS total_orders
+SELECT COUNT(DISTINCT order_id) AS total_orders
 FROM orders
 WHERE payment_amount > 0
 ```
 
 ### GQ-018: 日均订单数
 ```sql
-SELECT COUNT(DISTINCT order_no) / COUNT(DISTINCT order_date) AS daily_avg_orders
+SELECT COUNT(DISTINCT order_id) / COUNT(DISTINCT order_date) AS daily_avg_orders
 FROM orders
 WHERE payment_amount > 0
 ```
@@ -187,7 +187,7 @@ WHERE payment_amount > 0
 ### GQ-020: 退款金额占总销售比例
 ```sql
 SELECT 
-  SUM(CASE WHEN is_refunded = '是' THEN payment_amount ELSE 0 END)
+  SUM(CASE WHEN is_refund = '是' THEN payment_amount ELSE 0 END)
   / NULLIF(SUM(payment_amount), 0) AS refund_amount_share
 FROM orders
 WHERE payment_amount > 0
@@ -271,7 +271,7 @@ SELECT
     WHEN payment_amount < 5000 THEN '1000-5000元'
     ELSE '≥5000元'
   END AS band,
-  COUNT(DISTINCT order_no) AS cnt
+  COUNT(DISTINCT order_id) AS cnt
 FROM orders
 WHERE payment_amount > 0
 GROUP BY band
@@ -296,7 +296,7 @@ ORDER BY order_date
 ### GQ-029: 退款率异常平台
 ```sql
 SELECT platform_type,
-  SUM(CASE WHEN is_refunded = '是' THEN 1 ELSE 0 END) * 100.0 / COUNT(*) AS rate
+  SUM(CASE WHEN is_refund = '是' THEN 1 ELSE 0 END) * 100.0 / COUNT(*) AS rate
 FROM orders
 GROUP BY platform_type
 HAVING rate > 12  -- 行业基准上限
@@ -315,6 +315,6 @@ FROM (
   FROM orders
   WHERE payment_amount > 0
   GROUP BY user_name
-  HAVING COUNT(DISTINCT order_no) >= 2
+  HAVING COUNT(DISTINCT order_id) >= 2
 ) t
 ```

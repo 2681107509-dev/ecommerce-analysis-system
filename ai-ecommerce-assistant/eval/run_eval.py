@@ -18,6 +18,9 @@ import sys
 import time
 from pathlib import Path
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 # 让 ai-ecommerce-assistant 可作为包导入
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -41,9 +44,7 @@ def load_gold(path: Path) -> list[dict]:
 def fake_retriever() -> Retriever:
     """用 fake embedder + 内置知识子集跑冒烟评估。"""
     from unittest.mock import MagicMock
-    from tests.conftest import FakeEmbeddings
 
-    fake = FakeEmbeddings(dim=32)
     store = MagicMock()
     store.count.return_value = 6
 
@@ -53,7 +54,7 @@ def fake_retriever() -> Retriever:
         {"content": "客单价 = 总付款金额 / 总订单数", "metadata": {"source": "kpi_formulas.md", "doc_type": "kpi", "section": "客单价"}, "score": 0.92},
         {"content": "退款率行业基准约 2%-8%", "metadata": {"source": "business_rules.md", "doc_type": "business_rule", "section": "退款率基准"}, "score": 0.88},
         {"content": "payment_amount: 实际付款金额（单位元）", "metadata": {"source": "data_dictionary.md", "doc_type": "data_dict", "section": "payment_amount"}, "score": 0.85},
-        {"content": "is_refunded: 是/否", "metadata": {"source": "data_dictionary.md", "doc_type": "data_dict", "section": "is_refunded"}, "score": 0.83},
+        {"content": "is_refund: 是/否", "metadata": {"source": "data_dictionary.md", "doc_type": "data_dict", "section": "is_refund"}, "score": 0.83},
         {"content": "Recency≤30 天为活跃用户", "metadata": {"source": "biz_glossary.md", "doc_type": "glossary", "section": "RFM"}, "score": 0.80},
     ]
 

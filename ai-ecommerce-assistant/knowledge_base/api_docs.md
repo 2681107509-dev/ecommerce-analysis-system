@@ -27,7 +27,7 @@
 |------|------|------|
 | `/` | 8000 | 统一导航页（默认入口） |
 | `/BI/` | 8501 | BI 看板 |
-| `/ai/` | 8505 | AI 助手 |
+| `/ai/` | 8502 | AI 助手（Docker 内网端口） |
 | `/api/*` | 8000 | RESTful API |
 | `/docs` | 8000 | Swagger |
 | `/health` | 8000 | 健康检查 |
@@ -78,7 +78,8 @@
 ```
 GET  /                          # 导航页
 GET  /health                    # 基础健康检查
-GET  /health/detailed           # 详细健康检查（DB/Redis/AI 状态）
+GET  /health/detailed           # 详细健康检查（DB/Redis 状态）
+GET  /metrics                   # 服务请求与缓存指标
 GET  /api/monitor/services-status  # 服务状态
 GET  /api/monitor/metrics       # 监控指标
 GET  /docs                      # Swagger 文档
@@ -95,7 +96,6 @@ GET  /api/auth/me               # 获取当前用户信息
 GET  /api/orders                # 订单列表（分页/筛选）
 GET  /api/orders/{order_id}     # 订单详情
 GET  /api/orders/filter         # 多条件筛选
-GET  /api/orders/stats          # 订单统计
 ```
 
 ### 分析端点（需认证）
@@ -109,23 +109,21 @@ GET  /api/analytics/category-analysis # 品类分析
 
 ### RFM 端点（需认证）
 ```
+GET  /api/rfm/overview          # RFM 总览
 GET  /api/rfm/segments          # RFM 分层概览
-GET  /api/rfm/customers         # 分层用户列表
-GET  /api/rfm/thresholds        # 当前阈值
-POST /api/rfm/thresholds        # 更新阈值
+GET  /api/rfm/segments/{segment}# 分层用户列表
+GET  /api/rfm/top-users         # 高价值用户
 ```
 
 ### AI 端点
 ```
 POST /api/ai/query              # AI 问答（与 AI 助手同步）
-GET  /api/ai/history            # 历史问答
-DELETE /api/ai/history          # 清除历史
 ```
 
 ### 导出端点
 ```
-POST /api/export/orders         # 导出订单（CSV/Excel）
-GET  /api/export/formats        # 支持的格式
+GET  /api/export/orders         # 导出订单（CSV/Excel）
+GET  /api/export/analytics      # 导出分析报告
 ```
 
 ## 六、认证方式
@@ -136,15 +134,15 @@ POST /api/auth/login
 Content-Type: application/json
 
 {
-  "username": "demo",
-  "password": "demo123"
+  "username": "在环境变量中配置的用户名",
+  "password": "在环境变量中配置的密码"
 }
 
 # 响应
 {
   "access_token": "eyJ0eXAi...",
   "token_type": "bearer",
-  "user": {"id": 1, "username": "demo", "role": "user"}
+  "expires_in": 86400
 }
 ```
 
@@ -155,9 +153,8 @@ Authorization: Bearer eyJ0eXAi...
 ```
 
 ### 测试账号
-- **用户名**：`demo`
-- **密码**：`demo123`
-- **角色**：普通用户
+账号由 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 和
+`ANALYST_USERNAME` / `ANALYST_PASSWORD` 环境变量配置，不在代码或文档中固化密码。
 
 ## 七、限流规则
 
@@ -175,7 +172,7 @@ Authorization: Bearer eyJ0eXAi...
 - **ORM**：SQLAlchemy 2.0 (async)
 - **数据库**：MySQL 8 / SQLite (本地)
 - **缓存**：Redis 7 / 内存降级
-- **AI**：LangChain + DeepSeek-V4-Flash / OpenAI 兼容
+- **AI**：LangChain + DeepSeek `deepseek-chat` / OpenAI 兼容接口
 - **前端**：Streamlit 1.30+
 - **可视化**：Plotly 5.20+
 - **部署**：Docker + Docker Compose + Nginx
@@ -186,7 +183,7 @@ Authorization: Bearer eyJ0eXAi...
 - A: 可能列名写错，参考 [data_dictionary.md](data_dictionary.md)
 
 ### Q2: 为什么退款率与 BI 看板不一致？
-- A: BI 看板按付款 > 0 过滤；AI 助手按 `is_refunded` 计算率时分母可能不同
+- A: BI 看板按付款 > 0 过滤；AI 助手按 `is_refund` 计算率时分母可能不同
 
 ### Q3: AI 能查商品/类目吗？
 - A: 当前数据库只有 `orders` 表（无商品维度），只能基于订单金额、平台、时间、用户等分析

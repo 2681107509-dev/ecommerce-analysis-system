@@ -1,16 +1,16 @@
 import logging
 import time
 import os
-import sys
+import asyncio
+import json
 import httpx
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 from fastapi.responses import PlainTextResponse, JSONResponse
 
 from backend.database import check_db_connection
-from backend.routes.auth import get_current_user
 from backend.utils.cache import check_redis_health, stats as cache_stats
 
 logger = logging.getLogger(__name__)
@@ -97,7 +97,7 @@ async def detailed_health():
     except Exception as e:
         checks["redis"] = {"status": "error", "detail": str(e)}
 
-    all_ok = all(c.get("status") == "ok" for c in checks.values())
+    all_ok = all(c.get("status") in {"ok", "disabled"} for c in checks.values())
     return {
         "status": "healthy" if all_ok else "degraded",
         "checks": checks,
@@ -113,15 +113,22 @@ _EXTERNAL_SERVICES = {
 
 @router.get("/services-status", summary="外部服务状态")
 async def get_services_status():
-    results = {}
-    for name, url in _EXTERNAL_SERVICES.items():
+    async def _check(client: httpx.AsyncClient, name: str, url: str):
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                r = await client.get(url)
-                results[name] = {"status": "ok" if r.status_code == 200 else "error", "code": r.status_code}
+            r = await client.get(url)
+            return name, {
+                "status": "ok" if r.status_code == 200 else "error",
+                "code": r.status_code,
+            }
         except Exception as e:
-            results[name] = {"status": "error", "detail": str(e)}
-    return results
+            return name, {"status": "error", "detail": str(e)}
+
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        pairs = await asyncio.gather(*(
+            _check(client, name, url)
+            for name, url in _EXTERNAL_SERVICES.items()
+        ))
+    return dict(pairs)
 
 
 # ─────────────────── RAG 业务知识检索监控 ───────────────────
@@ -138,15 +145,50 @@ _RAG_STATS_PATH = os.environ.get(
 def _load_rag_stats() -> dict | None:
     """从 AI 助手进程写入的 JSON 文件读 stats。"""
     try:
-        # 通过 sys.path 引入 metrics 模块（避免重复实现 render）
-        ai_root = _PROJECT_ROOT / "ai-ecommerce-assistant"
-        if str(ai_root) not in sys.path:
-            sys.path.insert(0, str(ai_root))
-        from rag import metrics as rag_metrics  # noqa: E402
-        return rag_metrics.load_stats(_RAG_STATS_PATH)
-    except Exception as e:
+        return json.loads(Path(_RAG_STATS_PATH).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
         logger.warning("RAG stats 加载失败: %s", e)
         return None
+
+
+def render_rag_prometheus(stats: dict) -> str:
+    """将共享的 RAG 快照转换为 Prometheus exposition 文本。"""
+    if not stats:
+        return "# no stats available\n"
+
+    retriever = stats.get("retriever", {})
+    tool = stats.get("tool", {})
+    metrics = {
+        "rag_query_total": retriever.get("total_queries", 0),
+        "rag_cache_hits_total": retriever.get("cache_hits", 0),
+        "rag_store_hits_total": retriever.get("store_hits", 0),
+        "rag_no_results_total": retriever.get("no_results", 0),
+        "rag_timeouts_total": retriever.get("timeouts", 0),
+        "rag_query_latency_ms": retriever.get("avg_latency_ms", 0),
+        "rag_hit_rate_pct": retriever.get("hit_rate_pct", 0),
+        "rag_tool_call_total": tool.get("tool_call_count", 0),
+        "rag_tool_no_hit_total": tool.get("tool_no_hit_count", 0),
+        "rag_tool_error_total": tool.get("tool_error_count", 0),
+    }
+    lines = [f"{name} {value}" for name, value in metrics.items()]
+    for bucket, count in (retriever.get("score_buckets") or {}).items():
+        lines.append(f'rag_score_bucket{{range="{bucket}"}} {count}')
+    return "\n".join(lines) + "\n"
+
+
+def render_backend_prometheus() -> str:
+    """渲染当前 FastAPI 进程的基础请求指标。"""
+    uptime = max(int(time.time() - _start_time), 0)
+    total = _request_stats["total"]
+    success = _request_stats["success"]
+    error = _request_stats["error"]
+    return "\n".join([
+        f"commerce_backend_uptime_seconds {uptime}",
+        f"commerce_http_requests_total {total}",
+        f'commerce_http_responses_total{{status="success"}} {success}',
+        f'commerce_http_responses_total{{status="error"}} {error}',
+        "",
+    ])
 
 
 @router.get("/rag-stats", summary="RAG 检索统计")
@@ -173,19 +215,7 @@ async def get_rag_stats():
 async def get_rag_stats_prom():
     """把 RAG stats 渲染为 Prometheus exposition 格式，便于 Grafana / 监控系统抓取。"""
     stats = _load_rag_stats()
-    try:
-        ai_root = _PROJECT_ROOT / "ai-ecommerce-assistant"
-        if str(ai_root) not in sys.path:
-            sys.path.insert(0, str(ai_root))
-        from rag import metrics as rag_metrics  # noqa: E402
-        return PlainTextResponse(
-            content=rag_metrics.render_prometheus(stats or {}),
-            media_type="text/plain; version=0.0.4",
-        )
-    except Exception as e:
-        logger.warning("RAG Prometheus 渲染失败: %s", e)
-        return PlainTextResponse(
-            content=f"# render error: {e}\n",
-            media_type="text/plain; version=0.0.4",
-            status_code=500,
-        )
+    return PlainTextResponse(
+        content=render_rag_prometheus(stats or {}),
+        media_type="text/plain; version=0.0.4",
+    )

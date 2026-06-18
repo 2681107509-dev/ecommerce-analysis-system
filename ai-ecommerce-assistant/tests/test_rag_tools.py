@@ -8,8 +8,6 @@ import json
 import re
 from unittest.mock import MagicMock
 
-import pytest
-
 from rag.tools import (
     _RAG_META_BEGIN,
     _RAG_META_END,

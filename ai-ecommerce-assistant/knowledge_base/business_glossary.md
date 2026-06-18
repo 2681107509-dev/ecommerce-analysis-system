@@ -18,12 +18,12 @@
 
 ### 客单价 (AOV, Average Order Value)
 - **定义**：每笔订单平均金额
-- **SQL 公式**：`SUM(payment_amount) / COUNT(DISTINCT order_no)`
+- **SQL 公式**：`SUM(payment_amount) / COUNT(DISTINCT order_id)`
 - **单位**：元
 
 ### 订单数
 - **定义**：独立订单号数量
-- **SQL 公式**：`COUNT(DISTINCT order_no)`
+- **SQL 公式**：`COUNT(DISTINCT order_id)`
 - **注意**：不能 `COUNT(*)`（同一订单可能多商品行）
 
 ## 二、用户行为指标
@@ -50,7 +50,7 @@
 
 ### 退款率 (Refund Rate)
 - **定义**：退款订单数 / 总订单数
-- **SQL 公式**：`COUNT(*) WHERE is_refunded = '是' / COUNT(*)`
+- **SQL 公式**：`COUNT(*) WHERE is_refund = '是' / COUNT(*)`
 - **行业基准**：
   - 综合电商 3%-8%
   - 服饰 8%-15%
@@ -59,7 +59,7 @@
 
 ### 退款金额占比
 - **定义**：退款订单金额 / 总销售额
-- **SQL 公式**：`SUM(payment_amount WHERE is_refunded='是') / SUM(payment_amount)`
+- **SQL 公式**：`SUM(payment_amount WHERE is_refund='是') / SUM(payment_amount)`
 - **与退款率的区别**：金额口径更关注高客单价商品的退款
 
 ## 四、流量与渠道指标
@@ -78,7 +78,7 @@
 
 ### 星期分布
 - **周末效应**：周六日的销量通常比工作日高 20%-40%
-- **分析字段**：`weekday`（0=周一，6=周日）
+- **分析字段**：`weekday`（`Monday` 至 `Sunday`）
 
 ## 五、RFM 客户分层（与 BI 看板一致）
 

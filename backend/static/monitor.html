@@ -435,6 +435,12 @@ function errorBadgeClass(errors, total) {
     return 'many';
 }
 
+function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, ch => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    })[ch]);
+}
+
 async function loadDashboard() {
     try {
         const [metricsResp, healthResp] = await Promise.all([
@@ -503,7 +509,7 @@ async function loadDashboard() {
                         const iconClass = disabled ? 'warn' : (ok ? 'ok' : 'err');
                         return `<div class="health-item">
                             <div class="health-icon ${iconClass}">${icons[key] || '⚙️'}</div>
-                            <div class="health-info"><div class="name">${names[key] || key}</div><div class="detail">${details[key] || val.status}</div></div>
+                            <div class="health-info"><div class="name">${escapeHtml(names[key] || key)}</div><div class="detail">${escapeHtml(details[key] || val.status)}</div></div>
                             <span class="health-badge ${badgeClass}">${badgeText}</span>
                         </div>`;
                     }).join('')}
@@ -537,7 +543,7 @@ async function loadDashboard() {
                             const pct = maxCount > 0 ? Math.round(ep.count / maxCount * 100) : 0;
                             const ebc = errorBadgeClass(ep.errors, ep.count);
                             return `<tr>
-                                <td><span class="endpoint-path">${ep.path}</span></td>
+                                <td><span class="endpoint-path">${escapeHtml(ep.path)}</span></td>
                                 <td>${ep.count}</td>
                                 <td><div class="endpoint-bar"><div class="endpoint-bar-fill" style="width:${pct}%"></div></div></td>
                                 <td>${ep.avg_ms}ms</td>
@@ -556,7 +562,7 @@ async function loadDashboard() {
         animateDashboard();
         pulseStatusDot();
     } catch(e) {
-        document.getElementById('dashboard').innerHTML = `<div class="card col-12"><div class="card-body"><div class="error-text">加载失败: ${e.message}</div></div></div>`;
+        document.getElementById('dashboard').innerHTML = `<div class="card col-12"><div class="card-body"><div class="error-text">加载失败: ${escapeHtml(e.message)}</div></div></div>`;
     }
 }
 

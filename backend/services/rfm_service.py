@@ -1,4 +1,5 @@
 import logging
+import math
 from datetime import datetime
 from typing import Optional
 
@@ -21,20 +22,29 @@ _SEGMENT_PRIORITY = {
 }
 
 
-def _rfm_score(r_val: int, f_val: int, m_val: int) -> str:
-    if r_val >= 4 and f_val >= 4 and m_val >= 4:
+def _rfm_score(
+    r_val: int,
+    f_val: int,
+    m_val: int,
+    threshold: int = 3,
+) -> str:
+    """R 低分代表近期活跃，F/M 高分代表高频与高消费。"""
+    r_high = r_val <= threshold
+    f_high = f_val >= threshold
+    m_high = m_val >= threshold
+    if r_high and f_high and m_high:
         return "重要价值客户"
-    if r_val >= 4 and f_val >= 4 and m_val < 4:
+    if r_high and f_high and not m_high:
         return "重要发展客户"
-    if r_val >= 4 and f_val < 4 and m_val >= 4:
+    if r_high and not f_high and m_high:
         return "重要保持客户"
-    if r_val >= 4 and f_val < 4 and m_val < 4:
+    if r_high and not f_high and not m_high:
         return "重要挽留客户"
-    if r_val < 4 and f_val >= 4 and m_val >= 4:
+    if not r_high and f_high and m_high:
         return "一般价值客户"
-    if r_val < 4 and f_val >= 4 and m_val < 4:
+    if not r_high and f_high and not m_high:
         return "一般发展客户"
-    if r_val < 4 and f_val < 4 and m_val >= 4:
+    if not r_high and not f_high and m_high:
         return "一般保持客户"
     return "一般挽留客户"
 
@@ -43,20 +53,13 @@ def _quantile_score(values: list, val: float, n_bins: int = 5, reverse: bool = F
     if not values:
         return 1
     n = len(values)
-    if reverse:
-        # Recency: 低值=高分（最近消费），从高分往低分匹配
-        for i in range(n_bins, 0, -1):
-            threshold_idx = int(n * (n_bins - i + 1) / n_bins) - 1
-            threshold_idx = max(0, min(threshold_idx, n - 1))
-            if val <= values[threshold_idx]:
-                return i
-    else:
-        # Frequency/Monetary: 高值=高分（高频/高消费），从低分往高分匹配
-        for i in range(1, n_bins + 1):
-            threshold_idx = int(n * i / n_bins) - 1
-            threshold_idx = max(0, min(threshold_idx, n - 1))
-            if val <= values[threshold_idx]:
-                return i
+    # 所有维度先按值从低到高得到 1..n_bins。Recency 保持低分为优，
+    # Frequency/Monetary 同样保持高值高分。
+    for i in range(1, n_bins + 1):
+        threshold_idx = math.ceil(n * i / n_bins) - 1
+        threshold_idx = max(0, min(threshold_idx, n - 1))
+        if val <= values[threshold_idx]:
+            return i
     return n_bins
 
 
@@ -95,12 +98,18 @@ def _score_users(users: list[dict], n_bins: int = 5) -> list[dict]:
     frequency_values = sorted(u["frequency"] for u in users)
     monetary_values = sorted(u["monetary"] for u in users)
 
+    threshold = max(2, math.ceil(n_bins * 0.6))
     for u in users:
         u["r_score"] = _quantile_score(recency_values, u["recency_days"], n_bins, reverse=True)
         u["f_score"] = _quantile_score(frequency_values, u["frequency"], n_bins, reverse=False)
         u["m_score"] = _quantile_score(monetary_values, u["monetary"], n_bins, reverse=False)
         u["rfm_score"] = f"{u['r_score']}{u['f_score']}{u['m_score']}"
-        u["segment"] = _rfm_score(u["r_score"], u["f_score"], u["m_score"])
+        u["segment"] = _rfm_score(
+            u["r_score"],
+            u["f_score"],
+            u["m_score"],
+            threshold=threshold,
+        )
 
     return users
 
@@ -154,12 +163,21 @@ async def compute_rfm(
     avg_frequency = round(sum(u["frequency"] for u in users) / total_users, 2)
     avg_monetary = round(sum(u["monetary"] for u in users) / total_users, 2)
 
-    sorted_users = sorted(users, key=lambda u: u["r_score"] * 100 + u["f_score"] * 10 + u["m_score"], reverse=True)
+    sorted_users = sorted(
+        users,
+        key=lambda u: (
+            u["r_score"],
+            -u["f_score"],
+            -u["m_score"],
+            -u["monetary"],
+        ),
+    )
 
     return {
         "reference_date": str(ref_date),
         "total_users": total_users,
         "n_bins": n_bins,
+        "score_threshold": max(2, math.ceil(n_bins * 0.6)),
         "averages": {
             "recency_days": avg_recency,
             "frequency": avg_frequency,

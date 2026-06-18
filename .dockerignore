@@ -1,0 +1,16 @@
+.git
+.github
+.venv
+**/__pycache__
+**/.pytest_cache
+**/*.pyc
+.env
+**/.env
+logs
+output
+test_*.json
+backend_error.log
+backend_output.log
+notebook
+data/datas.xlsx
+data/cleaned_orders.parquet

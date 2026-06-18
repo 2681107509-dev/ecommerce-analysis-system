@@ -26,6 +26,13 @@ body { font-family: -apple-system, 'Segoe UI', sans-serif; background: #0f172a; 
 .header .url { margin-left: auto; color: #94a3b8; font-size: 14px; font-family: monospace; }
 
 .container { max-width: 1400px; margin: 0 auto; padding: 24px; display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 20px; }
+.auth-panel { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.auth-panel input {
+    min-width:180px; background:#0f172a; border:1px solid #334155; border-radius:8px;
+    padding:10px 12px; color:#e2e8f0; outline:none;
+}
+.auth-panel input:focus { border-color:#818cf8; box-shadow:0 0 0 3px rgba(129,140,248,.12); }
+.auth-hint { color:#94a3b8; font-size:13px; margin-left:auto; }
 
 .card { background: #1e293b; border-radius: 12px; border: 1px solid #334155; overflow: hidden; transition: transform 0.2s, box-shadow 0.2s; }
 .card:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(129, 140, 248, 0.15); }
@@ -100,6 +107,10 @@ body { font-family: -apple-system, 'Segoe UI', sans-serif; background: #0f172a; 
 
 @media (max-width: 768px) {
     .container { grid-template-columns: 1fr; padding: 12px; }
+    .header { padding:16px; flex-wrap:wrap; }
+    .header .url { margin-left:0; width:100%; }
+    .auth-panel input { min-width:100%; flex:1; }
+    .auth-hint { margin-left:0; width:100%; }
 }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/gsap@3/dist/gsap.min.js"></script>
@@ -117,34 +128,46 @@ body { font-family: -apple-system, 'Segoe UI', sans-serif; background: #0f172a; 
 
 <div class="container">
 
+    <div class="card full-width">
+        <div class="card-header"><h3>🔐 API 认证</h3><span class="status" id="auth_status"></span></div>
+        <div class="card-body" style="min-height:auto;">
+            <div class="auth-panel">
+                <input id="auth_username" autocomplete="username" placeholder="用户名">
+                <input id="auth_password" type="password" autocomplete="current-password" placeholder="密码">
+                <button class="ai-btn" onclick="loginAndLoad()">登录并加载数据</button>
+                <span class="auth-hint" id="auth_hint">账号由服务端环境变量配置，不在页面中保存。</span>
+            </div>
+        </div>
+    </div>
+
     <!-- 销售总览 -->
     <div class="card full-width">
         <div class="card-header"><h3><span class="status ok" id="s1_status"></span> 📊 销售总览</h3></div>
-        <div class="card-body"><div id="overview_content"><div class="loading-spinner">加载中...</div></div></div>
+        <div class="card-body"><div id="overview_content"><div class="loading-spinner">登录后加载数据</div></div></div>
     </div>
 
     <!-- 热销商品 -->
     <div class="card">
         <div class="card-header"><h3><span class="status ok" id="s2_status"></span> 🏆 热销商品 TOP5</h3></div>
-        <div class="card-body"><div id="products_content"><div class="loading-spinner">加载中...</div></div></div>
+        <div class="card-body"><div id="products_content"><div class="loading-spinner">登录后加载数据</div></div></div>
     </div>
 
     <!-- 用户行为 -->
     <div class="card">
         <div class="card-header"><h3><span class="status ok" id="s3_status"></span> 👥 用户行为分析</h3></div>
-        <div class="card-body"><div id="behavior_content"><div class="loading-spinner">加载中...</div></div></div>
+        <div class="card-body"><div id="behavior_content"><div class="loading-spinner">登录后加载数据</div></div></div>
     </div>
 
     <!-- 平台占比 -->
     <div class="card">
         <div class="card-header"><h3><span class="status ok" id="s4_status"></span> 📱 平台销售占比</h3></div>
-        <div class="card-body"><div id="category_content"><div class="loading-spinner">加载中...</div></div></div>
+        <div class="card-body"><div id="category_content"><div class="loading-spinner">登录后加载数据</div></div></div>
     </div>
 
     <!-- 最新订单 -->
     <div class="card full-width">
         <div class="card-header"><h3><span class="status ok" id="s5_status"></span> 📦 最新订单</h3></div>
-        <div class="card-body"><div id="orders_content"><div class="loading-spinner">加载中...</div></div></div>
+        <div class="card-body"><div id="orders_content"><div class="loading-spinner">登录后加载数据</div></div></div>
     </div>
 
     <!-- AI 助手 -->
@@ -163,8 +186,6 @@ body { font-family: -apple-system, 'Segoe UI', sans-serif; background: #0f172a; 
 
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/gsap@3/dist/gsap.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/gsap@3/dist/ScrollTrigger.min.js"></script>
 <script>
 // ====== 粒子背景 ======
 (function initParticles() {
@@ -359,21 +380,39 @@ document.querySelectorAll('.status.ok').forEach(dot => {
 const BASE = window.location.origin;
 let authToken = null;
 
+function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, ch => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    })[ch]);
+}
+
 async function ensureAuth() {
     if (authToken) return authToken;
+    const username = document.getElementById('auth_username').value.trim();
+    const password = document.getElementById('auth_password').value;
+    if (!username || !password) return null;
     try {
         const r = await fetch(BASE + '/api/auth/login', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({username: 'admin', password: 'admin123'})
+            body: JSON.stringify({username, password})
         });
         if (r.ok) {
             const d = await r.json();
             authToken = d.access_token;
+            setStatus('auth_status', true);
+            document.getElementById('auth_hint').textContent = `已登录：${username}`;
+            document.getElementById('auth_password').value = '';
             return authToken;
         }
+        setStatus('auth_status', false);
+        document.getElementById('auth_hint').textContent = '登录失败，请检查用户名或密码。';
         return null;
-    } catch(e) { return null; }
+    } catch(e) {
+        setStatus('auth_status', false);
+        document.getElementById('auth_hint').textContent = '认证服务不可用。';
+        return null;
+    }
 }
 
 // 带 token 的 fetch 封装
@@ -382,6 +421,13 @@ async function authFetch(url, options = {}) {
     if (!token) throw new Error('认证失败');
     const headers = { ...options.headers, 'Authorization': `Bearer ${token}` };
     return fetch(url, { ...options, headers });
+}
+
+async function loginAndLoad() {
+    authToken = null;
+    const token = await ensureAuth();
+    if (!token) return;
+    await Promise.all([loadOverview(), loadProducts(), loadBehavior(), loadCategory(), loadOrders()]);
 }
 
 document.getElementById('apiUrl').textContent = BASE + '/docs';
@@ -426,7 +472,7 @@ async function renderError(res, contentId, statusId) {
     } catch (_) { detail = res.statusText || ''; }
     const el = document.getElementById(contentId);
     if (el) {
-        el.innerHTML = `<div class="error-text">加载失败 (HTTP ${res.status}): ${String(detail).substring(0, 200)}</div>`;
+        el.innerHTML = `<div class="error-text">加载失败 (HTTP ${res.status}): ${escapeHtml(String(detail).substring(0, 200))}</div>`;
     }
 }
 
@@ -466,7 +512,7 @@ async function loadProducts() {
         let html = '<ul class="rank-list">';
         d.forEach((p, i) => {
             const cls = i === 0 ? 'top1' : i === 1 ? 'top2' : i === 2 ? 'top3' : 'normal';
-            html += `<li class="rank-item"><span class="rank-num ${cls}">${i + 1}</span><span class="rank-name">${p.product_id || '--'}</span><span class="rank-val">${formatMoney(p.total_sales)} (${formatNum(p.order_count)}笔)</span></li>`;
+            html += `<li class="rank-item"><span class="rank-num ${cls}">${i + 1}</span><span class="rank-name">${escapeHtml(p.product_id || '--')}</span><span class="rank-val">${formatMoney(p.total_sales)} (${formatNum(p.order_count)}笔)</span></li>`;
         });
         html += '</ul>';
         document.getElementById('products_content').innerHTML = html;
@@ -513,7 +559,7 @@ async function loadCategory() {
         let html = '';
         d.categories.forEach((c, i) => {
             html += `<div class="platform-bar">
-                <div class="platform-info"><span class="name">${c.platform_type || '--'}</span><span class="pct">${formatPercent(c.sales_ratio)} · ${formatMoney(c.total_sales)}</span></div>
+                <div class="platform-info"><span class="name">${escapeHtml(c.platform_type || '--')}</span><span class="pct">${formatPercent(c.sales_ratio)} · ${formatMoney(c.total_sales)}</span></div>
                 <div class="bar-track"><div class="bar-fill" style="width:${c.sales_ratio || 0}%;background:${colors[i % colors.length]}"></div></div>
             </div>`;
         });
@@ -537,9 +583,10 @@ async function loadOrders() {
         }
         let html = '<table class="order-table"><thead><tr><th>订单号</th><th>商品编号</th><th>付款金额</th><th>平台</th><th>下单时间</th></tr></thead><tbody>';
         d.items.forEach(o => {
-            const tagClass = o.platform_type === 'APP' ? 'tag-app' : o.platform_type.includes('微信') || o.platform_type.includes('公众号') ? 'tag-wx' : o.platform_type.includes('web') || o.platform_type.includes('网站') ? 'tag-web' : '';
+            const platform = String(o.platform_type || '');
+            const tagClass = platform === 'APP' ? 'tag-app' : platform.includes('微信') || platform.includes('公众号') ? 'tag-wx' : platform.toLowerCase().includes('web') || platform.includes('网站') ? 'tag-web' : '';
             const timeStr = o.order_time ? o.order_time.substring(0, 16).replace('T', ' ') : '--';
-            html += `<tr><td style="font-family:monospace;font-size:12px">${o.order_no || '--'}</td><td style="font-family:monospace">${o.product_id || '--'}</td><td>${formatMoney(o.payment_amount)}</td><td><span class="tag ${tagClass}">${o.platform_type || '--'}</span></td><td>${timeStr}</td></tr>`;
+            html += `<tr><td style="font-family:monospace;font-size:12px">${escapeHtml(o.order_no || '--')}</td><td style="font-family:monospace">${escapeHtml(o.product_id || '--')}</td><td>${formatMoney(o.payment_amount)}</td><td><span class="tag ${tagClass}">${escapeHtml(platform || '--')}</span></td><td>${escapeHtml(timeStr)}</td></tr>`;
         });
         html += '</tbody></table>';
         html += `<div style="margin-top:10px;color:#64748b;font-size:12px;">共 ${formatNum(d.total)} 条记录</div>`;
@@ -583,9 +630,9 @@ async function askAI() {
             if (d.result && d.result.length > 0) {
                 const keys = Object.keys(d.result[0]);
                 resultHtml = '<table class="order-table" style="margin-top:12px"><thead><tr>' +
-                    keys.map(k => `<th>${k}</th>`).join('') + '</tr></thead><tbody>';
+                    keys.map(k => `<th>${escapeHtml(k)}</th>`).join('') + '</tr></thead><tbody>';
                 d.result.slice(0, 10).forEach(row => {
-                    resultHtml += '<tr>' + keys.map(k => `<td>${row[k]}</td>`).join('') + '</tr>';
+                    resultHtml += '<tr>' + keys.map(k => `<td>${escapeHtml(row[k])}</td>`).join('') + '</tr>';
                 });
                 resultHtml += '</tbody></table>';
                 if (d.result.length > 10) resultHtml += `<div style="color:#64748b;font-size:12px;margin-top:6px;">共 ${d.result.length} 条结果，显示前10条</div>`;
@@ -593,21 +640,21 @@ async function askAI() {
 
             resp.innerHTML = `
                 <div style="color:#22c55e;font-weight:600;margin-bottom:8px;">✅ AI 回答：</div>
-                <div style="margin-bottom:12px;">${d.answer}</div>
+                <div style="margin-bottom:12px;">${escapeHtml(d.answer)}</div>
                 ${resultHtml}
                 <div style="margin-top:12px;padding-top:12px;border-top:1px solid #334155;">
                     <div style="color:#818cf8;font-size:12px;margin-bottom:4px;">🔍 生成的SQL:</div>
-                    <code style="display:block;background:#0a0f1e;padding:10px;border-radius:6px;font-size:12px;color:#a5b4fc;overflow-x:auto;">${d.sql}</code>
+                    <code style="display:block;background:#0a0f1e;padding:10px;border-radius:6px;font-size:12px;color:#a5b4fc;overflow-x:auto;">${escapeHtml(d.sql)}</code>
                 </div>`;
 
             // AI 回答动画
             gsap.from(resp, { y: 10, opacity: 0, duration: 0.4, ease: 'power2.out' });
         } else {
-            resp.innerHTML = `<div style="color:#f59e0b;">⚠️ ${d.answer || JSON.stringify(d)}</div>`;
+            resp.innerHTML = `<div style="color:#f59e0b;">⚠️ ${escapeHtml(d.answer || JSON.stringify(d))}</div>`;
         }
     } catch(e) {
         setStatus('s6_status', false);
-        resp.innerHTML = '<div class="error-text">请求失败: ' + e.message + '</div>';
+        resp.innerHTML = '<div class="error-text">请求失败: ' + escapeHtml(e.message) + '</div>';
     }
 
     btn.disabled = false;
@@ -619,8 +666,9 @@ document.getElementById('ai_input').addEventListener('keydown', e => {
     if (e.key === 'Enter') askAI();
 });
 
-// 全部加载
-Promise.all([loadOverview(), loadProducts(), loadBehavior(), loadCategory(), loadOrders()]);
+document.getElementById('auth_password').addEventListener('keydown', e => {
+    if (e.key === 'Enter') loginAndLoad();
+});
 </script>
 </body>
 </html>

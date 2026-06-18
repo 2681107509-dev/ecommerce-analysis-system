@@ -27,7 +27,7 @@ async def list_orders(
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),
     sort_by: str = Query("order_time", description="排序字段"),
-    sort_order: str = Query("desc", description="排序方向 asc/desc"),
+    sort_order: str = Query("desc", pattern="^(asc|desc)$", description="排序方向 asc/desc"),
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
@@ -58,7 +58,7 @@ async def filter_orders(
     min_amount: Optional[float] = Query(None, ge=0, description="最小付款金额"),
     max_amount: Optional[float] = Query(None, ge=0, description="最大付款金额"),
     sort_by: str = Query("order_time", description="排序字段"),
-    sort_order: str = Query("desc", description="排序方向"),
+    sort_order: str = Query("desc", pattern="^(asc|desc)$", description="排序方向"),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),
     db: AsyncSession = Depends(get_db),
@@ -70,9 +70,21 @@ async def filter_orders(
     - 支持时间范围、平台类型、用户名、商品编号、退款状态、金额范围筛选
     - 用户名支持模糊匹配
     """
+    parsed_start = date_type.fromisoformat(start_date) if start_date else None
+    parsed_end = date_type.fromisoformat(end_date) if end_date else None
+    if parsed_start and parsed_end and parsed_start > parsed_end:
+        raise HTTPException(status_code=400, detail="开始日期不能晚于结束日期")
+    if min_amount is not None and max_amount is not None and min_amount > max_amount:
+        raise HTTPException(status_code=400, detail="最小金额不能大于最大金额")
+    if sort_by not in SORT_COLUMN_MAP:
+        raise HTTPException(
+            status_code=400,
+            detail=f"无效排序字段 '{sort_by}'，可选值: {VALID_SORT_FIELDS}",
+        )
+
     filters = OrderFilterParams(
-        start_date=date_type.fromisoformat(start_date) if start_date else None,
-        end_date=date_type.fromisoformat(end_date) if end_date else None,
+        start_date=parsed_start,
+        end_date=parsed_end,
         platform_type=platform_type,
         user_name=user_name,
         product_id=product_id,

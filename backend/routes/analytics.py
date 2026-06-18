@@ -1,7 +1,8 @@
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException
+from datetime import date
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import get_db
@@ -38,8 +39,8 @@ async def sales_overview(db: AsyncSession = Depends(get_db), user: dict = Depend
 @router.get("/sales-trend", response_model=SalesTrendResponse, summary="销售趋势")
 async def sales_trend(
     granularity: str = Query("day", description="聚合粒度: day/week/month"),
-    start_date: Optional[str] = Query(None, description="开始日期 YYYY-MM-DD"),
-    end_date: Optional[str] = Query(None, description="结束日期 YYYY-MM-DD"),
+    start_date: Optional[date] = Query(None, description="开始日期 YYYY-MM-DD"),
+    end_date: Optional[date] = Query(None, description="结束日期 YYYY-MM-DD"),
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
@@ -51,8 +52,15 @@ async def sales_trend(
     - **end_date**: 可选，结束日期
     """
     if granularity not in ("day", "week", "month"):
-        granularity = "day"
-    return await analytics_service.get_sales_trend(db, granularity, start_date, end_date)
+        raise HTTPException(status_code=400, detail="granularity 仅支持 day/week/month")
+    if start_date and end_date and start_date > end_date:
+        raise HTTPException(status_code=400, detail="开始日期不能晚于结束日期")
+    return await analytics_service.get_sales_trend(
+        db,
+        granularity,
+        start_date.isoformat() if start_date else None,
+        end_date.isoformat() if end_date else None,
+    )
 
 
 @router.get("/top-products", response_model=list[TopProductResponse], summary="热销商品排名")

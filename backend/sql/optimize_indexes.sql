@@ -25,7 +25,7 @@ ALTER TABLE orders ADD INDEX idx_product_id (product_id);
 ALTER TABLE orders ADD INDEX idx_payment_amount (payment_amount);
 
 -- 退款分析
-ALTER TABLE orders ADD INDEX idx_is_refunded (is_refunded);
+ALTER TABLE orders ADD INDEX idx_is_refund (is_refund);
 
 -- 下单时间范围查询
 ALTER TABLE orders ADD INDEX idx_order_date (order_date);

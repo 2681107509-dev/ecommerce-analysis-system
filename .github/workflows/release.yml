@@ -213,7 +213,7 @@ jobs:
       - name: 构建并推送 ai-assistant 镜像
         uses: docker/build-push-action@v6
         with:
-          context: ./ai-ecommerce-assistant
+          context: .
           file: ./ai-ecommerce-assistant/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}

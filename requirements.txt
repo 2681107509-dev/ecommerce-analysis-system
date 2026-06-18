@@ -1,4 +1,5 @@
 pandas
+pyarrow
 numpy
 matplotlib
 plotly
@@ -6,3 +7,4 @@ streamlit
 jupyter
 openpyxl
 pymysql
+httpx

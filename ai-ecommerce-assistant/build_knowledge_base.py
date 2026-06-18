@@ -23,20 +23,22 @@ import argparse
 import hashlib
 import json
 import logging
-import os
 import re
 import sys
 import time
 from pathlib import Path
 from typing import Iterator
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 # 让脚本可独立运行
 _PROJECT_ROOT = Path(__file__).resolve().parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from langchain_core.documents import Document
-from rag import VectorStore, get_embeddings, DEFAULT_PERSIST_DIR
+from langchain_core.documents import Document  # noqa: E402
+from rag import VectorStore, get_embeddings, DEFAULT_PERSIST_DIR  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,

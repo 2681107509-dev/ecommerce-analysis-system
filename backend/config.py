@@ -1,7 +1,9 @@
 import os
-import secrets
 import logging
-from pydantic_settings import BaseSettings
+from urllib.parse import quote_plus
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field
 from functools import lru_cache
 
 _BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -10,6 +12,11 @@ logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=os.path.join(_BACKEND_DIR, ".env"),
+        env_file_encoding="utf-8",
+    )
+
     app_name: str = "AI Commerce Intelligence Platform"
     app_version: str = "1.7.0"
     debug: bool = False
@@ -31,22 +38,28 @@ class Settings(BaseSettings):
 
     llm_api_key: str = ""
     llm_base_url: str = "https://api.deepseek.com"
-    llm_model: str = "deepseek-v4-flash"
+    llm_model: str = "deepseek-chat"
 
     jwt_secret: str = ""
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 1440
+    admin_username: str = "admin"
+    admin_password: str = ""
+    analyst_username: str = "analyst"
+    analyst_password: str = ""
 
-    cors_origins: list[str] = ["http://localhost:8502", "http://localhost:8503", "http://localhost:8504", "http://localhost:8505", "http://localhost:8000"]
+    cors_origins: list[str] = Field(default_factory=lambda: [
+        "http://localhost:8501",
+        "http://localhost:8502",
+        "http://localhost:8505",
+        "http://localhost:8000",
+    ])
+    trust_proxy_headers: bool = False
 
     default_page_size: int = 20
     max_page_size: int = 100
 
     cache_ttl_seconds: int = 300
-
-    class Config:
-        env_file = os.path.join(_BACKEND_DIR, ".env")
-        env_file_encoding = "utf-8"
 
     def model_post_init(self, __context) -> None:
         if not self.jwt_secret:
@@ -55,11 +68,19 @@ class Settings(BaseSettings):
                 logger.warning("⚠️ JWT_SECRET 未设置，使用开发模式默认密钥，请勿用于生产环境！")
             else:
                 raise ValueError("生产环境必须设置 JWT_SECRET 环境变量！")
+        if not self.admin_password:
+            if self.debug:
+                self.admin_password = "admin123"
+                logger.warning("开发模式未设置 ADMIN_PASSWORD，使用本地默认密码")
+            else:
+                raise ValueError("生产环境必须设置 ADMIN_PASSWORD 环境变量！")
+        if not self.debug and self.admin_password == "change-this-admin-password":
+            raise ValueError("生产环境必须修改默认 ADMIN_PASSWORD！")
 
     @property
     def database_url(self) -> str:
         return (
-            f"mysql+pymysql://{self.db_user}:{self.db_password}"
+            f"mysql+pymysql://{quote_plus(self.db_user)}:{quote_plus(self.db_password)}"
             f"@{self.db_host}:{self.db_port}/{self.db_name}"
             f"?charset=utf8mb4"
         )
@@ -67,7 +88,7 @@ class Settings(BaseSettings):
     @property
     def async_database_url(self) -> str:
         return (
-            f"mysql+aiomysql://{self.db_user}:{self.db_password}"
+            f"mysql+aiomysql://{quote_plus(self.db_user)}:{quote_plus(self.db_password)}"
             f"@{self.db_host}:{self.db_port}/{self.db_name}"
             f"?charset=utf8mb4"
         )

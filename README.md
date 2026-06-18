@@ -15,7 +15,7 @@
 |------|--------|------|
 | **BI 数据看板** | Streamlit + Plotly | 交互式数据大屏，多维度交叉筛选 |
 | **AI 分析助手 + RAG** | LangChain + DeepSeek + Chroma + BGE | 自然语言提问，融合业务知识库与 SQL 数据查询，引用来源透明 |
-| **FastAPI 后端** | FastAPI + SQLAlchemy | 31 个 RESTful API，含认证/限流/缓存/监控/RFM |
+| **FastAPI 后端** | FastAPI + SQLAlchemy | 32 个 API 操作，含认证/限流/缓存/监控/RFM |
 | **RFM 用户画像** | SQLAlchemy + 量化分群 | R/F/M 五分位评分 → 8 类用户分群 + 流失预警 |
 | **数据分析 Notebook** | Jupyter + Pandas | 数据清洗、销售/时间/用户多维分析 |
 | **RAG 业务知识库** | Chroma + BGE-small-zh-v1.5 | 6 份业务文档（术语/数据字典/KPI/规则/API/黄金查询）向量检索 |
@@ -39,7 +39,7 @@
 ### Docker Compose 一键部署（推荐）
 
 ```bash
-git clone https://github.com/2681107509-dev/ai-commerce-intelligence-platform.git
+git clone https://github.com/super-ZXQ/ai-commerce-intelligence-platform.git
 cd ai-commerce-intelligence-platform
 
 cp deploy/.env.example .env
@@ -71,14 +71,15 @@ docker compose up -d
 | `/api/*` | backend:8000 | RESTful API |
 | `/nav` | backend:8000 | 导航页（备用路由） |
 | `/docs` `/redoc` `/openapi.json` | backend:8000 | Swagger / ReDoc 文档 |
-| `/health` `/demo` `/monitor` `/health-panel` | backend:8000 | 系统页面 |
+| `/health` `/health/detailed` `/metrics` | backend:8000 | 公开健康检查与 Prometheus 指标 |
+| `/demo` `/monitor` `/health-panel` | backend:8000 | 系统页面 |
 
-部署模式下仅 Nginx 对宿主机暴露 80 端口，业务服务、数据库和缓存只通过 Docker 内部网络通信。Nginx 已配置 `proxy_http_version 1.1`、`Upgrade` 和 `Connection` 头，支持 Streamlit WebSocket，避免反向代理后页面白屏。
+部署模式下仅 Nginx 对宿主机暴露 80 端口，业务服务、数据库和缓存只通过 Docker 内部网络通信。AI 助手的 Chroma 数据与 RAG 指标快照写入命名卷 `chroma_data`，后端以只读方式挂载同一卷用于监控。Nginx 已配置 `proxy_http_version 1.1`、`Upgrade` 和 `Connection` 头，支持 Streamlit WebSocket，避免反向代理后页面白屏。
 
 ### 本地开发
 
 ```bash
-git clone https://github.com/2681107509-dev/ai-commerce-intelligence-platform.git
+git clone https://github.com/super-ZXQ/ai-commerce-intelligence-platform.git
 cd ai-commerce-intelligence-platform
 
 python -m venv .venv && .venv\Scripts\activate
@@ -104,10 +105,12 @@ REDIS_HOST=localhost
 REDIS_PORT=6379
 
 JWT_SECRET=your-secret-key-change-in-production
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=请设置强密码
 
 LLM_API_KEY=sk-你的DeepSeekKey
 LLM_BASE_URL=https://api.deepseek.com
-LLM_MODEL=deepseek-v4-flash
+LLM_MODEL=deepseek-chat
 ```
 
 **`ai-ecommerce-assistant/.env`**：
@@ -115,7 +118,7 @@ LLM_MODEL=deepseek-v4-flash
 ```env
 LLM_API_KEY=sk-你的DeepSeekKey
 LLM_BASE_URL=https://api.deepseek.com
-LLM_MODEL=deepseek-v4-flash
+LLM_MODEL=deepseek-chat
 
 DB_USER=root
 DB_PASSWORD=你的MySQL密码
@@ -257,7 +260,10 @@ RAG 模块内置轻量级监控层，把"检索质量 + 性能 + 用户反馈"�
 # JSON 快照
 curl http://localhost:8000/api/monitor/rag-stats
 
-# Prometheus 抓取（可直接配 scrape config）
+# Prometheus 抓取（后端请求指标 + RAG 指标）
+curl http://localhost:8000/metrics
+
+# 仅抓取 RAG 指标
 curl http://localhost:8000/api/monitor/rag-stats.prom
 ```
 
@@ -280,7 +286,7 @@ rag_tool_call_total 18
 
 ### 3. 落盘策略
 
-- **综合 stats（JSON）**：`retriever` 在每次检索后节流（5s）调用 `dump_stats()`，把 retriever stats + tool stats 合并后**原子写入**（tmp + `os.replace`）`ai-ecommerce-assistant/data/rag_stats.json`。FastAPI 端点直接读这个文件。
+- **综合 stats（JSON）**：`retriever` 在每次检索后节流（5s）调用 `dump_stats()`，把 retriever stats + tool stats 合并后**原子写入**（tmp + `os.replace`）`ai-ecommerce-assistant/data/rag_stats.json`。Docker 中该目录由 AI 助手读写、后端只读共享。
 - **事件流（JSONL，可选）**：默认关闭，避免拖慢。设置环境变量 `RAG_EVENTS_LOG=1` 即开启 `data/rag_events.jsonl` 追加写入；每行一条结构化 JSON 事件，可直接被 Vector / Filebeat / Promtail 采集。
 - **用户反馈（JSONL，append-only）**：聊天界面的 👍/👎 按钮触发 `record_feedback()`，追加写入 `ai-ecommerce-assistant/eval/feedback.jsonl`；用于线下分析"检索误召回率"。
 
@@ -297,7 +303,7 @@ rag_tool_call_total 18
 
 | Workflow | 触发 | 职责 |
 |----------|------|------|
-| `.github/workflows/ci.yml` | PR / push main | AI 助手 107 个测试（Python 3.12 + 3.13 矩阵）+ 后端测试（带 MySQL service container + pymysql 同步建表 + 5 条 fake orders seed）+ 语法检查 |
+| `.github/workflows/ci.yml` | PR / push main | AI 助手 107 个测试（Python 3.12 + 3.13 矩阵）+ 后端 47 个测试（带 MySQL service container + 最小 seed）+ 语法检查 |
 | `.github/workflows/release.yml` | push main / tag `v*.*.*` / 手动 | 构建 backend / streamlit / ai-assistant 三个 Docker 镜像，**多架构**（linux/amd64 + linux/arm64），推送到 `ghcr.io/super-zxq/ai-commerce-intelligence-platform-{backend,streamlit,ai-assistant}` |
 
 **Tag 策略**（由 `docker/metadata-action` 自动管理）：
@@ -318,7 +324,7 @@ services:
     # ... 其余配置不变
 ```
 
-> **CI 状态：✅ 全绿（4/4 job success，run #9，commit 73d1599）。** 历史 P6.11 修复（[commit 73d1599](https://github.com/super-ZXQ/ai-commerce-intelligence-platform/commit/73d1599)）解决了后端 step 8 引用未 commit 的 `sql/01_create_table.sql` 导致的 0 秒挂掉问题——改用独立脚本 [`backend/scripts/init_ci_schema.py`](backend/scripts/init_ci_schema.py)（pymysql + SQLAlchemy `Base.metadata.create_all` 同步建表 + 5 条 fake orders 最小 seed），脚本首行 `sys.path.insert(repo_root)` 不依赖 PYTHONPATH/working-directory，stderr 走 tee + artifact 落盘便于失败排查。
+后端 CI 通过 [`backend/scripts/init_ci_schema.py`](backend/scripts/init_ci_schema.py) 初始化 schema 和最小测试数据；测试输出与初始化日志会作为 artifact 保留 7 天，便于排查失败。
 
 ### 2. 全栈健康检查脚本
 
@@ -392,15 +398,14 @@ docker compose pull && docker compose up -d
 
 ## 测试与评估
 
-### 单元测试（107 个用例）
+### 单元测试（154 个用例）
 
 ```bash
-# RAG + build_knowledge_base 全量测试
-cd ai-ecommerce-assistant
-python -m pytest tests/ -v
+# 后端（47 个）
+python -m pytest backend/tests/ -v
 
-# 跑某个文件
-python -m pytest tests/test_retriever.py -v
+# AI/RAG（107 个）
+python -m pytest ai-ecommerce-assistant/tests/ -v
 ```
 
 **测试覆盖：**
@@ -412,7 +417,13 @@ python -m pytest tests/test_retriever.py -v
 - `test_rag_metrics.py` — score_buckets / tool_call 计数 / 原子写入 / JSON 加载 / Prometheus 渲染 / 结构化事件 / JSONL 落盘 / 反馈写文件
 - `test_build_kb.py` — 文档切分函数（doc_type、doc_id、滑动窗口）
 
-测试不依赖真实 BGE 模型（首次下载 93MB），用 `tests/conftest.py` 里的 `FakeEmbeddings`（确定性 hash → 384 维归一化向量）。
+AI/RAG 测试不依赖真实 BGE 模型，用 `tests/conftest.py` 里的 `FakeEmbeddings` 生成确定性归一化向量。
+
+### 安全边界
+
+- LLM 生成 SQL 在显式执行和 SQLAlchemy Engine 执行前都会经过单语句只读校验，拦截写操作、文件读取/导出、存储过程和延时函数。
+- Docker 镜像构建时升级到 `pip>=26.1.2`；Embedding 依赖使用 `transformers 5.x`，避开已知的 4.x checkpoint 反序列化漏洞。
+- Chroma 仅以嵌入式本地库运行，不启动或暴露 Chroma Server API。当前 Chroma 最新版存在一个仅影响远程 Server API 的未修复公告，因此不要额外对外启动 Chroma HTTP 服务。
 
 ### 评估集（20 条 gold_qa）
 
@@ -457,7 +468,7 @@ ai-commerce-intelligence-platform/
 │   │   └── products.py           # 商品/用户排名
 │   ├── services/                 # 业务逻辑层
 │   ├── models/                   # ORM 模型 + Pydantic Schemas
-│   ├── utils/                    # 工具（认证/缓存/限流）
+│   ├── utils/                    # 工具（认证/缓存/限流/SQL 只读校验）
 │   ├── static/                   # HTML 静态页
 │   ├── sql/                      # SQL 脚本
 │   ├── scripts/                  # CI / 工具脚本
@@ -505,16 +516,16 @@ ai-commerce-intelligence-platform/
 | 分类 | 技术 |
 |------|------|
 | 语言 | Python 3.12 |
-| Web 框架 | FastAPI 0.115 + Uvicorn |
+| Web 框架 | FastAPI 0.110+ + Uvicorn |
 | ORM | SQLAlchemy 2.0 (async) |
-| 前端 | Streamlit 1.41 + Plotly |
-| AI | LangChain + DeepSeek V4 Flash |
+| 前端 | Streamlit 1.28+ + Plotly |
+| AI | LangChain + DeepSeek `deepseek-chat`（OpenAI 兼容接口） |
 | RAG | Chroma（向量库） + BGE-small-zh-v1.5（Embedding） + LangChain Tool |
 | 数据库 | MySQL 8.0 |
 | 缓存 | Redis 7 |
 | 反代 | Nginx |
 | 容器 | Docker + Docker Compose |
-| 测试 | pytest（107 个 RAG 用例 + 20 条 gold_qa 评估集） |
+| 测试 | pytest（47 个后端用例 + 107 个 RAG 用例 + 20 条 gold_qa 评估集） |
 
 ## License
 

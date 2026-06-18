@@ -104,11 +104,11 @@ rfm_score AS (
         user_name, R, F, M,
         -- R 打分（适配你的数据：平均147天，最大364天）
         CASE 
-            WHEN R <= 30 THEN 5      -- 最近1个月
-            WHEN R <= 90 THEN 4      -- 最近3个月
+            WHEN R <= 30 THEN 1      -- 最近1个月（低分更优）
+            WHEN R <= 90 THEN 2      -- 最近3个月
             WHEN R <= 180 THEN 3     -- 最近半年
-            WHEN R <= 270 THEN 2     -- 最近9个月
-            ELSE 1                    -- 9个月以上
+            WHEN R <= 270 THEN 4     -- 最近9个月
+            ELSE 5                    -- 9个月以上
         END AS R_score,
         -- F 打分（适配你的数据：平均1.31单，最大7单）
         CASE 
@@ -133,10 +133,10 @@ SELECT
     R_score, F_score, M_score,
     (R_score + F_score + M_score) AS total_score,
     CASE 
-        WHEN R_score >= 4 AND F_score >= 4 AND M_score >= 4 THEN '重要价值用户'
-        WHEN R_score >= 4 AND F_score >= 3 AND M_score <= 2 THEN '重要发展用户'
-        WHEN R_score <= 2 AND F_score >= 4 AND M_score >= 4 THEN '重要保持用户'
-        WHEN R_score <= 2 AND F_score <= 2 AND M_score <= 2 THEN '流失用户'
+        WHEN R_score <= 2 AND F_score >= 4 AND M_score >= 4 THEN '重要价值用户'
+        WHEN R_score <= 2 AND F_score >= 3 AND M_score <= 2 THEN '重要发展用户'
+        WHEN R_score >= 4 AND F_score >= 4 AND M_score >= 4 THEN '一般价值用户'
+        WHEN R_score >= 4 AND F_score <= 2 AND M_score <= 2 THEN '流失用户'
         ELSE '一般用户'
     END AS user_segment
 FROM rfm_score
@@ -154,17 +154,17 @@ WITH rfm_base AS (
 rfm_score AS (
     SELECT 
         user_name, R, F, M,
-        CASE WHEN R <= 30 THEN 5 WHEN R <= 90 THEN 4 WHEN R <= 180 THEN 3 WHEN R <= 270 THEN 2 ELSE 1 END AS R_score,
+        CASE WHEN R <= 30 THEN 1 WHEN R <= 90 THEN 2 WHEN R <= 180 THEN 3 WHEN R <= 270 THEN 4 ELSE 5 END AS R_score,
         CASE WHEN F >= 6 THEN 5 WHEN F >= 4 THEN 4 WHEN F >= 2 THEN 3 WHEN F = 1 THEN 2 ELSE 1 END AS F_score,
         CASE WHEN M >= 5000 THEN 5 WHEN M >= 2000 THEN 4 WHEN M >= 1000 THEN 3 WHEN M >= 500 THEN 2 ELSE 1 END AS M_score
     FROM rfm_base
 )
 SELECT 
     CASE 
-        WHEN R_score >= 4 AND F_score >= 4 AND M_score >= 4 THEN '重要价值用户'
-        WHEN R_score >= 4 AND F_score >= 3 AND M_score <= 2 THEN '重要发展用户'
-        WHEN R_score <= 2 AND F_score >= 4 AND M_score >= 4 THEN '重要保持用户'
-        WHEN R_score <= 2 AND F_score <= 2 AND M_score <= 2 THEN '流失用户'
+        WHEN R_score <= 2 AND F_score >= 4 AND M_score >= 4 THEN '重要价值用户'
+        WHEN R_score <= 2 AND F_score >= 3 AND M_score <= 2 THEN '重要发展用户'
+        WHEN R_score >= 4 AND F_score >= 4 AND M_score >= 4 THEN '一般价值用户'
+        WHEN R_score >= 4 AND F_score <= 2 AND M_score <= 2 THEN '流失用户'
         ELSE '一般用户'
     END AS 用户分层,
     COUNT(*) AS 用户数,

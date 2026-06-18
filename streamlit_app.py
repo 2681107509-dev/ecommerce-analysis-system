@@ -173,17 +173,20 @@ elif page == "👥 RFM 客户分层":
                                     help="M评分 ≥ 此值视为高消费金额")
 
     # ── RFM计算 ──
-    paid_df = df[df['付款金额'] > 0].copy()
+    paid_df = df[
+        (df['付款金额'] > 0)
+        & (df['下单时间'].dt.date <= ref_date_input)
+    ].copy()
     if len(paid_df) == 0:
         st.warning("⚠️ 当前筛选条件下无有效付款数据，无法进行 RFM 分析。")
         st.stop()
 
     @st.cache_data(show_spinner="正在计算RFM指标...")
-    def _score_rfm_frame(_paid_df, ref_date, n_bins_val):
+    def _score_rfm_frame(_paid_df, ref_date, n_bins_val, data_version):
         """对已过滤的付款订单 DataFrame 计算 R/F/M 评分。
 
-        _paid_df 加下划线前缀使 st.cache_data 跳过其哈希（DataFrame 不可哈希，
-        但 _cache_key 哈希已在上层计算并作为本函数输入之一）。
+        _paid_df 加下划线前缀使 st.cache_data 跳过其哈希；data_version
+        显式参与缓存键，保证订单数据变化后重新计算。
         """
         rfm = _paid_df.groupby('用户名').agg(
             last_order_date=('下单时间', 'max'),
@@ -196,8 +199,13 @@ elif page == "👥 RFM 客户分层":
         if actual_r_bins < 2:
             rfm['r_score'] = 1
         else:
-            rfm['r_score'] = pd.qcut(rfm['recency_days'], q=actual_r_bins, labels=False, duplicates='drop') + 1
-            rfm['r_score'] = (actual_r_bins + 1 - rfm['r_score']).astype(int)
+            rfm['r_score'] = pd.qcut(
+                rfm['recency_days'],
+                q=actual_r_bins,
+                labels=False,
+                duplicates='drop',
+            ) + 1
+            rfm['r_score'] = rfm['r_score'].astype(int)
             if actual_r_bins < n_bins_val:
                 rfm['r_score'] = np.ceil(rfm['r_score'] * n_bins_val / actual_r_bins).astype(int).clip(1, n_bins_val)
 
@@ -235,7 +243,7 @@ elif page == "👥 RFM 客户分层":
         tuple(_user_stats['order_count'].values),
         tuple(_user_stats['total_amount'].round(2).values),
     ))
-    rfm = _score_rfm_frame(paid_df, ref_date_input, n_bins)
+    rfm = _score_rfm_frame(paid_df, ref_date_input, n_bins, _cache_key)
 
     if '平台类型' in paid_df.columns:
         user_platform = paid_df.groupby('用户名')['平台类型'].agg(
@@ -457,14 +465,13 @@ elif page == "👥 RFM 客户分层":
                 st.rerun()
 
             st.markdown("---")
-            total_filtered = len(rfm)
-            st.metric("当前客户数", f"{total_filtered:,}")
-
         with col_matrix:
             rfm_m = rfm.copy()
             if filter_platform and '平台' in rfm_m.columns:
                 rfm_m = rfm_m[rfm_m['平台'].isin(filter_platform)]
             rfm_m = rfm_m[rfm_m['r_score'].between(r_range[0], r_range[1])]
+            with col_ctrl:
+                st.metric("当前客户数", f"{len(rfm_m):,}")
 
             # ── 预聚合 F×M ──
             all_f = list(range(1, n_bins + 1))

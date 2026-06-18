@@ -5,7 +5,7 @@
 - backend: /health, /health/detailed, /api/monitor/services-status
 - RAG stats: /api/monitor/rag-stats（JSON + Prometheus 格式）
 - BI 看板:  http://localhost:8501/_stcore/health
-- AI 助手: http://localhost:8502/_stcore/health
+- AI 助手: http://localhost:8505/_stcore/health
 - MySQL:   pymysql 连通性 + SELECT 1
 - Redis:   redis-py 连通性 + PING
 
@@ -132,7 +132,8 @@ def check_backend(backend: str) -> list[CheckResult]:
     """后端一组端点检查。"""
     return [
         _check_http("backend:/health", f"{backend}/health", expect_key="status"),
-        _check_http("backend:/health/detailed", f"{backend}/health/detailed"),
+        _check_http("backend:/health/detailed", f"{backend}/health/detailed",
+                    expect_key="checks"),
         _check_http("backend:/api/monitor/services-status",
                     f"{backend}/api/monitor/services-status"),
         _check_http("backend:/api/monitor/rag-stats",
@@ -230,8 +231,8 @@ def main() -> int:
                    help="后端 base URL（默认 http://localhost:8000）")
     p.add_argument("--bi", default="http://localhost:8501",
                    help="Streamlit BI base URL（默认 http://localhost:8501）")
-    p.add_argument("--ai", default="http://localhost:8502",
-                   help="Streamlit AI 助手 base URL（默认 http://localhost:8502）")
+    p.add_argument("--ai", default="http://localhost:8505",
+                   help="Streamlit AI 助手 base URL（默认 http://localhost:8505）")
     p.add_argument("--db", default=os.environ.get("DATABASE_URL"),
                    help="MySQL URL（默认读环境变量 DATABASE_URL）")
     p.add_argument("--redis", dest="redis_url", default=os.environ.get("REDIS_URL"),

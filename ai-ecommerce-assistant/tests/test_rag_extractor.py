@@ -1,12 +1,8 @@
 """RAG 来源抽取器测试：从 Agent intermediate_steps 还原结构化元数据。"""
 from __future__ import annotations
 
-import json
-
-import pytest
-
 from rag.extractor import extract_rag_sources
-from rag.tools import _RAG_META_BEGIN, _RAG_META_END, _build_meta_sentinel
+from rag.tools import _build_meta_sentinel
 
 
 def _make_step(tool_name: str, observation: str):

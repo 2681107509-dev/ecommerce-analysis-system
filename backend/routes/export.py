@@ -1,5 +1,6 @@
 import io
 import logging
+from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, HTTPException
@@ -23,8 +24,8 @@ _EXPORT_CHUNK_SIZE = 5000
 @router.get("/orders", summary="导出订单数据")
 async def export_orders(
     export_format: str = Query("csv", pattern="^(csv|excel)$", description="导出格式: csv/excel"),
-    start_date: Optional[str] = Query(None, description="开始日期 YYYY-MM-DD"),
-    end_date: Optional[str] = Query(None, description="结束日期 YYYY-MM-DD"),
+    start_date: Optional[date] = Query(None, description="开始日期 YYYY-MM-DD"),
+    end_date: Optional[date] = Query(None, description="结束日期 YYYY-MM-DD"),
     platform_type: Optional[str] = Query(None, description="平台类型"),
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user),
@@ -37,6 +38,9 @@ async def export_orders(
     - 大数据量导出建议使用CSV格式
     - 采用分批查询避免内存溢出
     """
+    if start_date and end_date and start_date > end_date:
+        raise HTTPException(status_code=400, detail="开始日期不能晚于结束日期")
+
     conditions = []
     if start_date:
         conditions.append(Order.order_date >= start_date)

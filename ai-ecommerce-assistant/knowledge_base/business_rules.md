@@ -86,7 +86,7 @@
 ## 六、查询性能约束
 
 - **超 100 万行查询**必须 `LIMIT`，避免内存溢出
-- **全表 COUNT** 用 `COUNT(DISTINCT order_no)` 避免重复
+- **全表 COUNT** 用 `COUNT(DISTINCT order_id)` 避免重复
 - **时间筛选优先**：先 `WHERE order_date` 减少扫描行数
 - **避免 `SELECT *`**：只查必要列
 

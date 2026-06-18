@@ -9,7 +9,7 @@
 
 | 表名 | 含义 | 主键 | 行数 |
 |------|------|------|------|
-| `orders` | 订单事实表 | `id` | ~100,000 |
+| `orders` | 订单事实表 | `order_seq_id` | ~100,000 |
 | `users` (未来) | 用户维度表 | `user_id` | - |
 | `products` (未来) | 商品维度表 | `product_id` | - |
 
@@ -19,8 +19,8 @@
 
 | 字段名 | 类型 | 含义 | 备注 |
 |--------|------|------|------|
-| `id` | INT | 主键 | 自增，业务不引用 |
-| `order_no` | VARCHAR(64) | 订单号 | 业务唯一标识 |
+| `order_seq_id` | INT | 主键 | 订单顺序编号 |
+| `order_id` | VARCHAR(50) | 订单号 | 业务唯一标识 |
 | `user_name` | VARCHAR(64) | 用户名 | 脱敏后，可能重复 |
 
 ### 时间字段（3 个）
@@ -30,7 +30,7 @@
 | `order_date` | DATE | 下单日期 | 时间范围筛选主字段 |
 | `order_time` | DATETIME | 下单时间 | 精确时段分析 |
 | `order_hour` | INT | 下单小时 (0-23) | 时段分布图 |
-| `weekday` | INT | 星期几 (0-周一, 6-周日) | 周分布分析 |
+| `weekday` | VARCHAR(20) | 星期英文名 | `Monday` 至 `Sunday` |
 
 **注意**：
 - `order_date` 是 DATE 类型，比较时不需要时间部分
@@ -68,14 +68,14 @@ GROUP BY platform_type
 
 | 字段名 | 类型 | 含义 | 枚举值 |
 |--------|------|------|--------|
-| `is_refunded` | VARCHAR(2) | 是否退款 | `'是'` = 已退款, `'否'` = 未退款 |
+| `is_refund` | VARCHAR(2) | 是否退款 | `'是'` = 已退款, `'否'` = 未退款 |
 
 **SQL 用法**：
 ```sql
 -- 退款订单
-WHERE is_refunded = '是'
+WHERE is_refund = '是'
 -- 未退款
-WHERE is_refunded = '否'
+WHERE is_refund = '否'
 ```
 
 **注意**：
@@ -101,7 +101,7 @@ WHERE order_date BETWEEN '2025-12-01' AND '2025-12-31'
 ```sql
 -- 按平台分组统计
 SELECT platform_type,
-       COUNT(DISTINCT order_no) AS order_count,
+       COUNT(DISTINCT order_id) AS order_count,
        SUM(payment_amount) AS total_sales
 FROM orders
 WHERE payment_amount > 0
@@ -119,14 +119,14 @@ SELECT ... ORDER BY payment_amount DESC LIMIT 10
 | 陷阱 | 错误示例 | 正确写法 |
 |------|---------|---------|
 | 错用字段 | `SELECT order_amount` | `SELECT payment_amount` |
-| 退款布尔判断 | `WHERE is_refunded = true` | `WHERE is_refunded = '是'` |
-| 订单数计数 | `COUNT(*)` | `COUNT(DISTINCT order_no)` |
+| 退款布尔判断 | `WHERE is_refund = true` | `WHERE is_refund = '是'` |
+| 订单数计数 | `COUNT(*)` | `COUNT(DISTINCT order_id)` |
 | 时间混用 | `WHERE order_time >= '2025-12-01'` | `WHERE order_date >= '2025-12-01'` |
 | 平台值写错 | `WHERE platform = 'APP'` | `WHERE platform_type = 'APP'` |
 
 ## 数据质量
 
 - **缺失值**：`user_name` 可能有 0.5% 缺失（用 `'未知用户'` 替代）
-- **重复订单**：`order_no` 应唯一，发现重复需 `DISTINCT`
+- **重复订单**：`order_id` 应唯一，发现重复需 `DISTINCT`
 - **时间戳格式**：统一 `YYYY-MM-DD HH:MM:SS`，无需 `STRFTIME` 转换
 - **金额精度**：保留 2 位小数，聚合时无需 `ROUND`，显示时再 ROUND

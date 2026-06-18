@@ -436,6 +436,12 @@ function timeAgo(iso) {
     return Math.floor(diff / 3600000) + '小时前';
 }
 
+function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, ch => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    })[ch]);
+}
+
 async function loadHealth() {
     try {
         const resp = await fetch(BASE + '/api/monitor/health/detailed');
@@ -487,7 +493,7 @@ async function loadHealth() {
                         <div class="check-icon-wrap ${dbOk ? 'ok-db' : 'err'}">🗄️</div>
                         <div class="check-detail">
                             <div class="check-name">数据库连接</div>
-                            <div class="check-desc">${dbOk ? 'MySQL 连接正常，可正常读写' : (checks.database?.detail || '连接异常')}</div>
+                            <div class="check-desc">${dbOk ? 'MySQL 连接正常，可正常读写' : escapeHtml(checks.database?.detail || '连接异常')}</div>
                         </div>
                         <span class="check-status-badge ${dbOk ? 'ok' : 'err'}">${dbOk ? '● 正常' : '● 异常'}</span>
                     </div>
@@ -543,7 +549,7 @@ async function loadHealth() {
         animateHealth();
         pulseHealthyDot();
     } catch(e) {
-        document.getElementById('dashboard').innerHTML = `<div class="card col-12"><div class="card-body"><div class="error-text">❌ 健康检查请求失败: ${e.message}<br><br>可能原因：API 服务未启动或网络不通</div></div></div>`;
+        document.getElementById('dashboard').innerHTML = `<div class="card col-12"><div class="card-body"><div class="error-text">❌ 健康检查请求失败: ${escapeHtml(e.message)}<br><br>可能原因：API 服务未启动或网络不通</div></div></div>`;
     }
 }
 

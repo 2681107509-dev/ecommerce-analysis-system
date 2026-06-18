@@ -27,6 +27,11 @@ DEFAULT_PERSIST_DIR = os.path.join(
 DEFAULT_COLLECTION = "business_knowledge"
 
 
+def _distance_to_relevance(distance: float) -> float:
+    """将非负距离稳定映射到 0-1，兼容真实与测试 Embedding。"""
+    return 1.0 / (1.0 + max(float(distance), 0.0))
+
+
 class VectorStore:
     """业务知识向量库。
 
@@ -48,6 +53,7 @@ class VectorStore:
             collection_name=collection_name,
             embedding_function=self._embeddings,
             persist_directory=persist_dir,
+            relevance_score_fn=_distance_to_relevance,
         )
         logger.info("VectorStore 就绪: %s (collection=%s)",
                     persist_dir, collection_name)
@@ -163,6 +169,7 @@ class VectorStore:
                 collection_name=self.collection_name,
                 embedding_function=self._embeddings,
                 persist_directory=self.persist_dir,
+                relevance_score_fn=_distance_to_relevance,
             )
         except Exception as e:
             logger.error("重建 store 失败: %s", e)

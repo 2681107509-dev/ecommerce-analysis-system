@@ -8,6 +8,8 @@ import datetime
 import hashlib
 import decimal
 import logging
+import html
+from urllib.parse import quote_plus
 from pathlib import Path
 import pandas as pd
 import plotly.express as px
@@ -25,6 +27,10 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 from backend.utils.text_cleaner import clean_sql  # noqa: E402
+from backend.utils.sql_guard import (  # noqa: E402
+    ensure_read_only_sql,
+    guard_read_only_engine,
+)
 
 # 业务知识来源抽取（无 streamlit 依赖，便于单元测试）
 from rag import extract_rag_sources  # noqa: E402
@@ -78,7 +84,7 @@ def record_feedback(question: str, answer: str, rating: str,
 
 API_KEY = os.getenv("LLM_API_KEY")
 BASE_URL = os.getenv("LLM_BASE_URL", "https://api.deepseek.com")
-MODEL_NAME = os.getenv("LLM_MODEL", "deepseek-v4-flash")
+MODEL_NAME = os.getenv("LLM_MODEL", "deepseek-chat")
 
 DB_USER = os.getenv("DB_USER")
 DB_PASSWORD = os.getenv("DB_PASSWORD")
@@ -111,7 +117,7 @@ BUSINESS_CONTEXT = """## 数据时间范围
    - "最近7天" → 数据中最近7天：2025-12-25 至 2025-12-31
    - "最近30天" → 数据中最近30天
 4. 金额查询使用 payment_amount（实际付款金额）
-5. 退款相关使用 is_refunded = '是' 表示已退款
+5. 退款相关使用 is_refund = '是' 表示已退款
 6. SQL 结果较大时使用 LIMIT 限制
 7. 先给出数据结论，再附上 SQL 语句
 8. 用中文回答
@@ -181,7 +187,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("🤖 AI 智能商业分析平台")
-st.caption("基于 LangChain + DeepSeek V4 Flash 的 Text-to-SQL 智能查询 | 自然语言提问 → 自动生成 SQL → 数据可视化")
+st.caption("基于 LangChain + DeepSeek 的 Text-to-SQL 智能查询 | 自然语言提问 → 自动生成 SQL → 数据可视化")
 
 if "messages" not in st.session_state:
     st.session_state.messages = [
@@ -205,7 +211,10 @@ if "query_history" not in st.session_state:
 
 def get_db_uri():
     if USE_MYSQL:
-        return f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+        return (
+            f"mysql+pymysql://{quote_plus(DB_USER)}:{quote_plus(DB_PASSWORD)}"
+            f"@{DB_HOST}:{DB_PORT}/{DB_NAME}?charset=utf8mb4"
+        )
     db_path = os.path.join(os.path.dirname(__file__), "ecommerce.db")
     return f"sqlite:///{db_path}"
 
@@ -213,7 +222,9 @@ def get_db_uri():
 @st.cache_resource
 def init_db():
     try:
-        return SQLDatabase.from_uri(get_db_uri())
+        database = SQLDatabase.from_uri(get_db_uri())
+        guard_read_only_engine(database._engine)
+        return database
     except Exception as e:
         st.error(f"❌ 数据库连接失败：{e}")
         return None
@@ -225,7 +236,9 @@ def init_engine() -> Engine | None:
     避免 db.run(sql, fetch="cursor") 在部分方言（如 KingbaseES）上抛
     NotImplementedError 后 fallback 到 ast.literal_eval 的 'malformed node or string' 错误。"""
     try:
-        return create_engine(get_db_uri(), pool_pre_ping=True)
+        engine = create_engine(get_db_uri(), pool_pre_ping=True)
+        guard_read_only_engine(engine)
+        return engine
     except Exception as e:
         st.warning(f"⚠️ SQLAlchemy engine 初始化失败：{e}")
         return None
@@ -304,6 +317,8 @@ def init_agent(_db, _retriever):
         extra_tools=extra_tools,
         verbose=True,
         agent_type="zero-shot-react-description",
+        handle_parsing_errors=True,
+        agent_executor_kwargs={"return_intermediate_steps": True},
     )
 
 
@@ -865,6 +880,7 @@ def _convert_value(val):
 def run_sql_query(sql: str) -> pd.DataFrame | None:
     try:
         sql = clean_sql_local(sql)
+        ensure_read_only_sql(sql)
 
         # 路径 0（首选）：直接用 SQLAlchemy Engine 执行，绕开 langchain wrapper。
         # 不依赖 db.run(fetch="cursor") 的方言实现，对 KingbaseES/MySQL/SQLite 都能
@@ -958,7 +974,7 @@ def run_sql_query(sql: str) -> pd.DataFrame | None:
 
         return None
 
-    except Exception as e:
+    except Exception:
         return None
 
 
@@ -1007,6 +1023,7 @@ def render_answer_with_highlights(answer: str):
 
     # 2. 剥离 LLM 生成的预填充 markdown 表格（避免与系统真实数据表格重复显示）
     answer = strip_markdown_tables(answer)
+    answer = html.escape(answer)
 
     # 3. 保护 markdown 代码块（```...```），避免数字高亮污染 SQL/代码
     # 注意：占位符不能包含数字或百分号，否则会被下面的高亮正则误匹配

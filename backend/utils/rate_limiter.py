@@ -62,16 +62,20 @@ def _ensure_cleanup_thread():
         t.start()
 
 
-def _get_client_id(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        ips = [ip.strip() for ip in forwarded.split(",")]
-        if ips:
-            return ips[-1]
+def _get_client_id(request: Request, trust_proxy_headers: bool = False) -> str:
+    if trust_proxy_headers:
+        real_ip = request.headers.get("x-real-ip")
+        if real_ip:
+            return real_ip.strip()
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            ips = [ip.strip() for ip in forwarded.split(",")]
+            if ips:
+                return ips[0]
     return request.client.host if request.client else "unknown"
 
 
-def check_rate_limit(request: Request) -> dict:
+def check_rate_limit(request: Request, trust_proxy_headers: bool = False) -> dict:
     _ensure_cleanup_thread()
     path = request.url.path
     limit_config = RATE_LIMITS.get(path)
@@ -83,7 +87,7 @@ def check_rate_limit(request: Request) -> dict:
     if not limit_config:
         limit_config = RATE_LIMITS["default"]
 
-    client_id = _get_client_id(request)
+    client_id = _get_client_id(request, trust_proxy_headers=trust_proxy_headers)
     key = f"{client_id}:{path}"
     now = time.time()
     window = limit_config["window"]

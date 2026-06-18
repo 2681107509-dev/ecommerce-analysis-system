@@ -14,16 +14,16 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from datetime import datetime, date
-from decimal import Decimal
+from datetime import datetime, date  # noqa: E402
+from decimal import Decimal  # noqa: E402
 
-import pymysql
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker
+import pymysql  # noqa: E402
+from sqlalchemy import create_engine, text  # noqa: E402
+from sqlalchemy.orm import sessionmaker  # noqa: E402
 
-from backend.config import get_settings
-from backend.database import Base
-from backend.models.database_models import Order  # noqa: F401 注册 ORM
+from backend.config import get_settings  # noqa: E402
+from backend.database import Base  # noqa: E402
+from backend.models.database_models import Order  # noqa: E402, F401 注册 ORM
 
 
 def main() -> None:

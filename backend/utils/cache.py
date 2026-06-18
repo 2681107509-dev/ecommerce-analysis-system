@@ -6,6 +6,7 @@ import time
 import asyncio
 from typing import Any, Optional, Callable, Awaitable
 from functools import wraps
+from pydantic import BaseModel, TypeAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,16 @@ def _make_key(*args, **kwargs) -> str:
     return hashlib.md5(raw.encode()).hexdigest()
 
 
+def _to_jsonable(value: Any) -> Any:
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
+    if isinstance(value, dict):
+        return {k: _to_jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_jsonable(v) for v in value]
+    return value
+
+
 def get(key: str) -> Optional[Any]:
     if _redis_available and _redis_client:
         try:
@@ -70,6 +81,7 @@ def get(key: str) -> Optional[Any]:
         return None
     if entry["expires_at"] < time.time():
         del _memory_cache[key]
+        _cache_locks.pop(key, None)
         return None
     return entry["data"]
 
@@ -77,7 +89,7 @@ def get(key: str) -> Optional[Any]:
 def set(key: str, value: Any, ttl: int = DEFAULT_TTL) -> None:
     if _redis_available and _redis_client:
         try:
-            _redis_client.setex(key, ttl, json.dumps(value, default=str))
+            _redis_client.setex(key, ttl, json.dumps(_to_jsonable(value), default=str))
             return
         except Exception as e:
             logger.warning(f"Redis SET 失败，降级内存: {e}")
@@ -86,9 +98,11 @@ def set(key: str, value: Any, ttl: int = DEFAULT_TTL) -> None:
         expired = [k for k, v in _memory_cache.items() if v["expires_at"] < now]
         for k in expired:
             del _memory_cache[k]
+            _cache_locks.pop(k, None)
         if len(_memory_cache) >= _MEMORY_CACHE_MAX_SIZE:
             oldest_key = next(iter(_memory_cache))
             del _memory_cache[oldest_key]
+            _cache_locks.pop(oldest_key, None)
     _memory_cache[key] = {"data": value, "expires_at": time.time() + ttl}
 
 
@@ -99,6 +113,7 @@ def delete(key: str) -> None:
         except Exception:
             pass
     _memory_cache.pop(key, None)
+    _cache_locks.pop(key, None)
 
 
 def clear() -> None:
@@ -108,6 +123,7 @@ def clear() -> None:
         except Exception:
             pass
     _memory_cache.clear()
+    _cache_locks.clear()
 
 
 def stats() -> dict:
@@ -134,6 +150,12 @@ def cached(ttl: int = DEFAULT_TTL):
     """
     def decorator(func: Callable[..., Awaitable[Any]]):
         sig = inspect.signature(func)
+        return_annotation = sig.return_annotation
+        return_adapter = (
+            None
+            if return_annotation in (inspect.Signature.empty, Any)
+            else TypeAdapter(return_annotation)
+        )
         param_names = list(sig.parameters.keys())
 
         def _cache_key_args(args: tuple, kwargs: dict) -> tuple:
@@ -157,13 +179,21 @@ def cached(ttl: int = DEFAULT_TTL):
             cached_result = get(cache_key)
             if cached_result is not None:
                 logger.debug(f"缓存命中: {cache_key}")
-                return cached_result
+                return (
+                    return_adapter.validate_python(cached_result)
+                    if return_adapter
+                    else cached_result
+                )
             if cache_key not in _cache_locks:
                 _cache_locks[cache_key] = asyncio.Lock()
             async with _cache_locks[cache_key]:
                 cached_result = get(cache_key)
                 if cached_result is not None:
-                    return cached_result
+                    return (
+                        return_adapter.validate_python(cached_result)
+                        if return_adapter
+                        else cached_result
+                    )
                 result = await func(*args, **kwargs)
                 set(cache_key, result, ttl=ttl)
                 logger.debug(f"已缓存: {cache_key} (TTL={ttl}s)")
@@ -188,6 +218,7 @@ def invalidate_pattern(pattern: str) -> int:
     keys_to_delete = [k for k in _memory_cache if pattern in k]
     for k in keys_to_delete:
         del _memory_cache[k]
+        _cache_locks.pop(k, None)
         count += 1
     return count
 
