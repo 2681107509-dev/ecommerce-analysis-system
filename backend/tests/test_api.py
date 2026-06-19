@@ -51,6 +51,11 @@ class TestSystem:
         assert "text/html" in r.headers["content-type"]
 
     @pytest.mark.asyncio
+    async def test_favicon_does_not_return_404(self, client: AsyncClient):
+        r = await client.get("/favicon.ico")
+        assert r.status_code == 204
+
+    @pytest.mark.asyncio
     async def test_health(self, client: AsyncClient):
         r = await client.get("/health")
         assert r.status_code in (200,)

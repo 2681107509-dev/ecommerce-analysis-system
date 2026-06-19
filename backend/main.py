@@ -7,7 +7,7 @@ from typing import Callable, Awaitable
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse, PlainTextResponse
+from fastapi.responses import JSONResponse, FileResponse, PlainTextResponse, Response
 
 from backend.config import get_settings
 from backend.database import engine, check_db_connection
@@ -196,6 +196,12 @@ _STATIC_DIR = os.path.join(_DEMO_DIR, "static")
 @app.get("/", tags=["系统"])
 async def root() -> FileResponse:
     return FileResponse(os.path.join(_STATIC_DIR, "index.html"))
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon() -> Response:
+    """浏览器默认图标请求无需记录为 404。"""
+    return Response(status_code=204)
 
 
 @app.get("/health", tags=["系统"])

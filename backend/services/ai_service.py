@@ -3,12 +3,15 @@ import re
 import json
 import asyncio
 import hashlib
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Optional
 from functools import lru_cache
 
 from langchain_community.utilities.sql_database import SQLDatabase
 from langchain_openai import ChatOpenAI
 from langchain_community.agent_toolkits import create_sql_agent, SQLDatabaseToolkit
+from sqlalchemy import text
 
 from backend.config import get_settings
 from backend.models.schemas import AIQueryResponse
@@ -127,6 +130,35 @@ def _build_visualization(columns: list[str], rows: list) -> Optional[dict]:
         "y_field": columns[1] if len(columns) > 1 else None,
         "data": [dict(zip(columns, row)) for row in rows] if rows else [],
     }
+
+
+def _json_safe_value(value):
+    """把数据库类型转换为 API 可稳定序列化的基础类型。"""
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
+def _execute_query_with_columns(sql: str) -> list[dict]:
+    """执行只读 SQL，并直接使用数据库返回的列名映射结果。
+
+    不再从 SELECT 文本中按逗号猜测列名；CASE、ROUND 等复杂表达式内部
+    也包含逗号，字符串切分会导致列名与结果错位。
+    """
+    if not _is_read_only_sql(sql):
+        raise ValueError("仅允许执行只读 SQL")
+
+    db = _get_sync_db()
+    with db._engine.connect() as connection:
+        rows = connection.execute(text(sql)).mappings().all()
+    return [
+        {str(key): _json_safe_value(value) for key, value in row.items()}
+        for row in rows
+    ]
 
 
 _is_read_only_sql = is_read_only_sql
@@ -273,40 +305,10 @@ async def process_natural_language_query(query: str) -> AIQueryResponse:
             if extracted_sql:
                 try:
                     if _is_read_only_sql(extracted_sql):
-                        db = _get_sync_db()
-                        raw_result = await asyncio.to_thread(db.run, extracted_sql)
-                        logger.info(f"SQL执行原始结果: {raw_result[:500] if isinstance(raw_result, str) else str(raw_result)[:500]}")
-                        if isinstance(raw_result, str):
-                            try:
-                                parsed = json.loads(raw_result)
-                                if isinstance(parsed, list):
-                                    result_data = parsed
-                            except json.JSONDecodeError:
-                                import ast
-                                try:
-                                    import re as _re
-                                    cleaned = _re.sub(r"Decimal\('([^']+)'\)", r"\1", raw_result)
-                                    parsed = ast.literal_eval(cleaned)
-                                    if isinstance(parsed, list):
-                                        if parsed and isinstance(parsed[0], tuple):
-                                            col_match = re.search(r'SELECT\s+(.+?)\s+FROM', extracted_sql, re.IGNORECASE)
-                                            if col_match:
-                                                cols = [c.strip().split(' AS ')[-1].strip('`"\'') for c in col_match.group(1).split(',')]
-                                                result_data = [dict(zip(cols, row)) for row in parsed]
-                                            else:
-                                                result_data = [dict(enumerate(row)) for row in parsed]
-                                        elif parsed and isinstance(parsed[0], dict):
-                                            result_data = parsed
-                                except (ValueError, SyntaxError):
-                                    pass
-                        elif isinstance(raw_result, list):
-                            if raw_result and isinstance(raw_result[0], dict):
-                                result_data = raw_result
-                            elif raw_result and isinstance(raw_result[0], tuple):
-                                col_match = re.search(r'SELECT\s+(.+?)\s+FROM', extracted_sql, re.IGNORECASE)
-                                if col_match:
-                                    cols = [c.strip().split(' AS ')[-1].strip('`"\'') for c in col_match.group(1).split(',')]
-                                    result_data = [dict(zip(cols, row)) for row in raw_result]
+                        result_data = await asyncio.to_thread(
+                            _execute_query_with_columns,
+                            extracted_sql,
+                        )
 
                         if result_data and isinstance(result_data[0], dict):
                             columns = list(result_data[0].keys())
@@ -359,49 +361,10 @@ async def process_natural_language_query(query: str) -> AIQueryResponse:
                         answer="⚠️ 仅支持数据查询操作，不允许修改数据库",
                         visualization=None,
                     )
-                db = _get_sync_db()
-                raw_result = await asyncio.to_thread(db.run, extracted_sql)
-                logger.info(f"SQL执行原始结果: {raw_result[:500] if isinstance(raw_result, str) else str(raw_result)[:500]}")
-                if isinstance(raw_result, str):
-                    try:
-                        parsed = json.loads(raw_result)
-                        if isinstance(parsed, list):
-                            result_data = parsed
-                    except json.JSONDecodeError:
-                        import ast
-                        try:
-                            # 替换 Decimal(...) 为直接数值
-                            import re as _re
-                            cleaned = _re.sub(r"Decimal\('([^']+)'\)", r"\1", raw_result)
-                            parsed = ast.literal_eval(cleaned)
-                            if isinstance(parsed, list):
-                                if parsed and isinstance(parsed[0], tuple):
-                                    col_match = re.search(r'SELECT\s+(.+?)\s+FROM', extracted_sql, re.IGNORECASE)
-                                    if col_match:
-                                        cols = [c.strip().split(' AS ')[-1].strip('`"\'') for c in col_match.group(1).split(',')]
-                                        result_data = [dict(zip(cols, row)) for row in parsed]
-                                    else:
-                                        result_data = [dict(enumerate(row)) for row in parsed]
-                                elif parsed and isinstance(parsed[0], dict):
-                                    result_data = parsed
-                            elif isinstance(parsed, dict):
-                                result_data = [parsed]
-                            elif isinstance(parsed, tuple):
-                                if parsed and isinstance(parsed[0], tuple):
-                                    col_match = re.search(r'SELECT\s+(.+?)\s+FROM', extracted_sql, re.IGNORECASE)
-                                    if col_match:
-                                        cols = [c.strip().split(' AS ')[-1].strip('`"\'') for c in col_match.group(1).split(',')]
-                                        result_data = [dict(zip(cols, parsed[0]))]
-                        except (ValueError, SyntaxError):
-                            pass
-                elif isinstance(raw_result, list):
-                    if raw_result and isinstance(raw_result[0], dict):
-                        result_data = raw_result
-                    elif raw_result and isinstance(raw_result[0], tuple):
-                        col_match = re.search(r'SELECT\s+(.+?)\s+FROM', extracted_sql, re.IGNORECASE)
-                        if col_match:
-                            cols = [c.strip().split(' AS ')[-1].strip('`"\'') for c in col_match.group(1).split(',')]
-                            result_data = [dict(zip(cols, row)) for row in raw_result]
+                result_data = await asyncio.to_thread(
+                    _execute_query_with_columns,
+                    extracted_sql,
+                )
 
                 if result_data and isinstance(result_data[0], dict):
                     columns = list(result_data[0].keys())

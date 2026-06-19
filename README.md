@@ -304,7 +304,7 @@ rag_tool_call_total 18
 
 | Workflow | 触发 | 职责 |
 |----------|------|------|
-| `.github/workflows/ci.yml` | PR / push main | AI 助手 107 个测试（Python 3.12 + 3.13 矩阵）+ 后端 56 个测试（带 MySQL service container + 最小 seed）+ 语法检查 |
+| `.github/workflows/ci.yml` | PR / push main | AI 助手 107 个测试（Python 3.12 + 3.13 矩阵）+ 后端 58 个测试（带 MySQL service container + 最小 seed）+ 语法检查 |
 | `.github/workflows/release.yml` | push main / tag `v*.*.*` / 手动 | 构建 backend / streamlit / ai-assistant 三个 Docker 镜像，**多架构**（linux/amd64 + linux/arm64），推送到 `ghcr.io/super-zxq/ai-commerce-intelligence-platform-{backend,streamlit,ai-assistant}` |
 
 **Tag 策略**（由 `docker/metadata-action` 自动管理）：
@@ -402,10 +402,10 @@ docker compose pull && docker compose up -d
 
 ## 测试与评估
 
-### 单元测试（163 个用例）
+### 单元测试（165 个用例）
 
 ```bash
-# 后端（56 个）
+# 后端（58 个）
 python -m pytest backend/tests/ -v
 
 # AI/RAG（107 个）
@@ -534,7 +534,7 @@ ai-commerce-intelligence-platform/
 | 缓存 | Redis 7 |
 | 反代 | Nginx |
 | 容器 | Docker + Docker Compose |
-| 测试 | pytest（56 个后端用例 + 107 个 RAG 用例 + 20 条 gold_qa 评估集） |
+| 测试 | pytest（58 个后端用例 + 107 个 RAG 用例 + 20 条 gold_qa 评估集） |
 
 ## License
 

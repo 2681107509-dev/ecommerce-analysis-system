@@ -1,4 +1,5 @@
 import asyncio
+from decimal import Decimal
 from inspect import Signature, signature
 from types import SimpleNamespace
 
@@ -8,6 +9,7 @@ from backend.config import Settings
 from backend.scripts.sync_orders import build_import_sql
 from backend.models.schemas import SalesOverviewResponse
 from backend.services import rfm_service
+from backend.services import ai_service
 from backend.services.rfm_service import (
     _score_users,
     _summary_from_snapshot,
@@ -90,6 +92,48 @@ def test_rfm_redis_summary_excludes_full_user_lists():
     assert "users" not in summary
     assert "sorted_users" not in summary
     assert summary["total_users"] == 1
+
+
+def test_ai_query_uses_database_column_aliases(monkeypatch):
+    class FakeMappings:
+        @staticmethod
+        def all():
+            return [{
+                "refund_rate": Decimal("13.18"),
+                "avg_order_value": Decimal("994.81"),
+            }]
+
+    class FakeResult:
+        @staticmethod
+        def mappings():
+            return FakeMappings()
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        @staticmethod
+        def execute(_statement):
+            return FakeResult()
+
+    class FakeEngine:
+        @staticmethod
+        def connect():
+            return FakeConnection()
+
+    monkeypatch.setattr(
+        ai_service,
+        "_get_sync_db",
+        lambda: SimpleNamespace(_engine=FakeEngine()),
+    )
+    result = ai_service._execute_query_with_columns(
+        "SELECT ROUND(1, 2) AS refund_rate, ROUND(3, 2) AS avg_order_value"
+    )
+
+    assert result == [{"refund_rate": 13.18, "avg_order_value": 994.81}]
 
 
 @pytest.mark.asyncio

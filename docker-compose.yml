@@ -131,6 +131,7 @@ services:
       - --server.headless=true
       - --server.baseUrlPath=/BI
       - --browser.gatherUsageStats=false
+      - --server.fileWatcherType=none
     depends_on:
       mysql:
         condition: service_healthy
@@ -166,6 +167,7 @@ services:
         --server.headless=true
         --server.baseUrlPath=/ai
         --browser.gatherUsageStats=false
+        --server.fileWatcherType=none
     volumes:
       - huggingface_cache:/root/.cache/huggingface
       - chroma_data:/app/ai-ecommerce-assistant/data
