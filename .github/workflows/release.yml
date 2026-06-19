@@ -221,5 +221,6 @@ jobs:
           labels: ${{ needs.prepare.outputs.assistant_labels }}
           cache-from: type=local,src=/tmp/.buildx-cache-assistant
           cache-to: type=local,dest=/tmp/.buildx-cache-assistant-new,mode=max
+          allow: network.host
           provenance: false
           sbom: false

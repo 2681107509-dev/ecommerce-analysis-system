@@ -10,8 +10,11 @@
 - Redis:   redis-py 连通性 + PING
 
 用法：
-  # 默认（localhost，本地 docker-compose 端口）
+  # 默认（本地开发三端口）
   python scripts/health_check.py
+
+  # Docker Compose（Nginx 统一入口）
+  python scripts/health_check.py --docker
 
   # 自定义目标 + 输出
   python scripts/health_check.py --backend http://api.example.com \\
@@ -90,16 +93,22 @@ def _now() -> str:
 
 def _check_http(name: str, url: str, timeout: float = 5.0,
                 expect_status: int = 200,
-                expect_key: Optional[str] = None) -> CheckResult:
+                expect_key: Optional[str] = None,
+                warn_statuses: tuple[int, ...] = ()) -> CheckResult:
     """HTTP 健康检查通用函数。"""
     started = time.time()
     res = CheckResult(name=name, target=url, status="ok",
                       latency_ms=0.0, timestamp=_now())
     try:
-        with httpx.Client(timeout=timeout) as client:
+        with httpx.Client(timeout=timeout, trust_env=False) as client:
             r = client.get(url)
         elapsed = (time.time() - started) * 1000
         res.latency_ms = round(elapsed, 1)
+        if r.status_code in warn_statuses:
+            res.status = "warn"
+            res.error = f"HTTP {r.status_code}（服务尚未产生可用数据）"
+            res.detail["body_preview"] = r.text[:200]
+            return res
         if r.status_code != expect_status:
             res.status = "error"
             res.error = f"HTTP {r.status_code} (期望 {expect_status})"
@@ -128,25 +137,28 @@ def _check_http(name: str, url: str, timeout: float = 5.0,
         return res
 
 
-def check_backend(backend: str) -> list[CheckResult]:
+def check_backend(backend: str, timeout: float) -> list[CheckResult]:
     """后端一组端点检查。"""
     return [
-        _check_http("backend:/health", f"{backend}/health", expect_key="status"),
+        _check_http("backend:/health", f"{backend}/health", timeout=timeout,
+                    expect_key="status"),
         _check_http("backend:/health/detailed", f"{backend}/health/detailed",
-                    expect_key="checks"),
+                    timeout=timeout, expect_key="checks"),
         _check_http("backend:/api/monitor/services-status",
-                    f"{backend}/api/monitor/services-status"),
+                    f"{backend}/api/monitor/services-status", timeout=timeout),
         _check_http("backend:/api/monitor/rag-stats",
-                    f"{backend}/api/monitor/rag-stats"),
+                    f"{backend}/api/monitor/rag-stats",
+                    timeout=timeout,
+                    warn_statuses=(503,)),
     ]
 
 
-def check_bi(bi: str) -> list[CheckResult]:
-    return [_check_http("bi:streamlit", f"{bi}/_stcore/health")]
+def check_bi(bi: str, timeout: float) -> list[CheckResult]:
+    return [_check_http("bi:streamlit", f"{bi}/_stcore/health", timeout=timeout)]
 
 
-def check_ai(ai: str) -> list[CheckResult]:
-    return [_check_http("ai:streamlit", f"{ai}/_stcore/health")]
+def check_ai(ai: str, timeout: float) -> list[CheckResult]:
+    return [_check_http("ai:streamlit", f"{ai}/_stcore/health", timeout=timeout)]
 
 
 def check_mysql(db_url: str) -> list[CheckResult]:
@@ -233,6 +245,8 @@ def main() -> int:
                    help="Streamlit BI base URL（默认 http://localhost:8501）")
     p.add_argument("--ai", default="http://localhost:8505",
                    help="Streamlit AI 助手 base URL（默认 http://localhost:8505）")
+    p.add_argument("--docker", action="store_true",
+                   help="通过 Docker Compose 的 Nginx 统一入口检查")
     p.add_argument("--db", default=os.environ.get("DATABASE_URL"),
                    help="MySQL URL（默认读环境变量 DATABASE_URL）")
     p.add_argument("--redis", dest="redis_url", default=os.environ.get("REDIS_URL"),
@@ -246,15 +260,20 @@ def main() -> int:
                    help="HTTP 请求超时秒数（默认 5）")
     args = p.parse_args()
 
+    if args.docker:
+        args.backend = "http://localhost"
+        args.bi = "http://localhost/BI"
+        args.ai = "http://localhost/ai"
+
     checks = {c.strip() for c in args.checks.split(",") if c.strip()}
     results: list[CheckResult] = []
 
     if "backend" in checks:
-        results.extend(check_backend(args.backend.rstrip("/")))
+        results.extend(check_backend(args.backend.rstrip("/"), args.timeout))
     if "bi" in checks:
-        results.extend(check_bi(args.bi.rstrip("/")))
+        results.extend(check_bi(args.bi.rstrip("/"), args.timeout))
     if "ai" in checks:
-        results.extend(check_ai(args.ai.rstrip("/")))
+        results.extend(check_ai(args.ai.rstrip("/"), args.timeout))
     if "db" in checks:
         if args.db:
             results.extend(check_mysql(args.db))

@@ -10,6 +10,15 @@ _BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 
 logger = logging.getLogger(__name__)
 
+_INSECURE_JWT_SECRETS = {
+    "change-this-secret-in-production",
+    "your_jwt_secret_key_change_this_in_production",
+}
+_INSECURE_ADMIN_PASSWORDS = {
+    "change-this-admin-password",
+    "change-this-analyst-password",
+}
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -74,8 +83,14 @@ class Settings(BaseSettings):
                 logger.warning("开发模式未设置 ADMIN_PASSWORD，使用本地默认密码")
             else:
                 raise ValueError("生产环境必须设置 ADMIN_PASSWORD 环境变量！")
-        if not self.debug and self.admin_password == "change-this-admin-password":
-            raise ValueError("生产环境必须修改默认 ADMIN_PASSWORD！")
+        if not self.debug:
+            if self.jwt_secret in _INSECURE_JWT_SECRETS or len(self.jwt_secret) < 32:
+                raise ValueError("生产环境 JWT_SECRET 至少需要 32 位且不能使用示例值！")
+            if (
+                self.admin_password in _INSECURE_ADMIN_PASSWORDS
+                or len(self.admin_password) < 12
+            ):
+                raise ValueError("生产环境 ADMIN_PASSWORD 至少需要 12 位且不能使用示例值！")
 
     @property
     def database_url(self) -> str:

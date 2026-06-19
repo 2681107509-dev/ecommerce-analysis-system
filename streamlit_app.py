@@ -7,6 +7,8 @@ from datetime import datetime
 import os
 import numpy as np
 
+from backend.utils.rfm_scoring import assign_segment, quantile_scores
+
 # ══════════════════════════════════════════════════════════════
 # 全局样式
 # ══════════════════════════════════════════════════════════════
@@ -195,43 +197,18 @@ elif page == "👥 RFM 客户分层":
         ).reset_index()
         rfm['recency_days'] = (pd.Timestamp(ref_date) - rfm['last_order_date']).dt.days
 
-        actual_r_bins = min(rfm['recency_days'].nunique(), n_bins_val)
-        if actual_r_bins < 2:
-            rfm['r_score'] = 1
-        else:
-            rfm['r_score'] = pd.qcut(
-                rfm['recency_days'],
-                q=actual_r_bins,
-                labels=False,
-                duplicates='drop',
-            ) + 1
-            rfm['r_score'] = rfm['r_score'].astype(int)
-            if actual_r_bins < n_bins_val:
-                rfm['r_score'] = np.ceil(rfm['r_score'] * n_bins_val / actual_r_bins).astype(int).clip(1, n_bins_val)
-
-        freq_for_cut = rfm['frequency'].copy()
-        actual_f_bins = min(freq_for_cut.nunique(), n_bins_val)
-        if actual_f_bins < 2:
-            rfm['f_score'] = 1
-        else:
-            if freq_for_cut.nunique() < n_bins_val:
-                rfm['f_score'] = pd.cut(freq_for_cut, bins=actual_f_bins, labels=False, include_lowest=True) + 1
-            else:
-                rfm['f_score'] = pd.qcut(freq_for_cut, q=n_bins_val, labels=False, duplicates='drop') + 1
-            if actual_f_bins < n_bins_val:
-                rfm['f_score'] = np.ceil(rfm['f_score'] * n_bins_val / actual_f_bins).astype(int).clip(1, n_bins_val)
-
-        monetary_for_cut = rfm['monetary'].copy()
-        actual_m_bins = min(monetary_for_cut.nunique(), n_bins_val)
-        if actual_m_bins < 2:
-            rfm['m_score'] = 1
-        else:
-            if monetary_for_cut.nunique() < n_bins_val:
-                rfm['m_score'] = pd.cut(monetary_for_cut, bins=actual_m_bins, labels=False, include_lowest=True) + 1
-            else:
-                rfm['m_score'] = pd.qcut(monetary_for_cut, q=n_bins_val, labels=False, duplicates='drop') + 1
-            if actual_m_bins < n_bins_val:
-                rfm['m_score'] = np.ceil(rfm['m_score'] * n_bins_val / actual_m_bins).astype(int).clip(1, n_bins_val)
+        rfm['r_score'] = quantile_scores(
+            rfm['recency_days'].tolist(),
+            n_bins_val,
+        )
+        rfm['f_score'] = quantile_scores(
+            rfm['frequency'].tolist(),
+            n_bins_val,
+        )
+        rfm['m_score'] = quantile_scores(
+            rfm['monetary'].tolist(),
+            n_bins_val,
+        )
         return rfm
 
     _user_stats = paid_df.groupby('用户名').agg(
@@ -252,27 +229,17 @@ elif page == "👥 RFM 客户分层":
         rfm = rfm.merge(user_platform, on='用户名', how='left')
 
     # ── 分层逻辑（R≤阈值=高，F/M≥阈值=高）──
-    def assign_segment(row, r_th, f_th, m_th):
-        r_high = row['r_score'] <= r_th
-        f_high = row['f_score'] >= f_th
-        m_high = row['m_score'] >= m_th
-        if r_high and f_high and m_high:
-            return "重要价值客户"
-        if r_high and f_high and not m_high:
-            return "重要发展客户"
-        if r_high and not f_high and m_high:
-            return "重要保持客户"
-        if r_high and not f_high and not m_high:
-            return "重要挽留客户"
-        if not r_high and f_high and m_high:
-            return "一般价值客户"
-        if not r_high and f_high and not m_high:
-            return "一般发展客户"
-        if not r_high and not f_high and m_high:
-            return "一般保持客户"
-        return "一般挽留客户"
-
-    rfm['客户分层'] = rfm.apply(lambda row: assign_segment(row, r_threshold, f_threshold, m_threshold), axis=1).astype(str)
+    rfm['客户分层'] = rfm.apply(
+        lambda row: assign_segment(
+            row['r_score'],
+            row['f_score'],
+            row['m_score'],
+            r_threshold,
+            f_threshold,
+            m_threshold,
+        ),
+        axis=1,
+    ).astype(str)
 
     seg_order = ["重要价值客户", "重要发展客户", "重要保持客户", "重要挽留客户",
                  "一般价值客户", "一般发展客户", "一般保持客户", "一般挽留客户"]

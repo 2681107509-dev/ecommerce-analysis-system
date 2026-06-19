@@ -57,7 +57,7 @@ docker compose up -d
 ├── ea-streamlit    → BI 看板 (Docker 内网 :8501)
 ├── ea-backend      → FastAPI (Docker 内网 :8000)
 ├── ea-ai-assistant → AI 助手 (Docker 内网 :8502, baseUrlPath=/ai)
-├── ea-mysql        → MySQL 8.0 (Docker 内网 :3306) + 自动建表+导入
+├── ea-mysql        → MySQL 8.0 (Docker 内网 :3306) + 自动建表
 └── ea-redis        → Redis 7 Alpine (Docker 内网 :6379) + AOF持久化 + LRU淘汰
 ```
 
@@ -74,7 +74,7 @@ docker compose up -d
 | `/health` `/health/detailed` `/metrics` | backend:8000 | 公开健康检查与 Prometheus 指标 |
 | `/demo` `/monitor` `/health-panel` | backend:8000 | 系统页面 |
 
-部署模式下仅 Nginx 对宿主机暴露 80 端口，业务服务、数据库和缓存只通过 Docker 内部网络通信。AI 助手的 Chroma 数据与 RAG 指标快照写入命名卷 `chroma_data`，后端以只读方式挂载同一卷用于监控。Nginx 已配置 `proxy_http_version 1.1`、`Upgrade` 和 `Connection` 头，支持 Streamlit WebSocket，避免反向代理后页面白屏。
+部署模式下仅 Nginx 对宿主机暴露 80 端口，业务服务、数据库和缓存只通过 Docker 内部网络通信。后端启动前会按 CSV SHA-256 校验订单版本；数据变化时先导入临时表、校验行数，再原子替换正式表。AI 助手的 Chroma 数据与 RAG 指标快照写入命名卷 `chroma_data`，后端以只读方式挂载同一卷用于监控。Nginx 已配置 `proxy_http_version 1.1`、`Upgrade` 和 `Connection` 头，支持 Streamlit WebSocket，避免反向代理后页面白屏。
 
 ### 本地开发
 
@@ -303,7 +303,7 @@ rag_tool_call_total 18
 
 | Workflow | 触发 | 职责 |
 |----------|------|------|
-| `.github/workflows/ci.yml` | PR / push main | AI 助手 107 个测试（Python 3.12 + 3.13 矩阵）+ 后端 47 个测试（带 MySQL service container + 最小 seed）+ 语法检查 |
+| `.github/workflows/ci.yml` | PR / push main | AI 助手 107 个测试（Python 3.12 + 3.13 矩阵）+ 后端 53 个测试（带 MySQL service container + 最小 seed）+ 语法检查 |
 | `.github/workflows/release.yml` | push main / tag `v*.*.*` / 手动 | 构建 backend / streamlit / ai-assistant 三个 Docker 镜像，**多架构**（linux/amd64 + linux/arm64），推送到 `ghcr.io/super-zxq/ai-commerce-intelligence-platform-{backend,streamlit,ai-assistant}` |
 
 **Tag 策略**（由 `docker/metadata-action` 自动管理）：
@@ -333,6 +333,9 @@ services:
 ```bash
 # 默认检查全栈（localhost 各端口）
 python scripts/health_check.py
+
+# Docker Compose（Nginx 统一入口）
+python scripts/health_check.py --docker
 
 # CI 用：失败时非零退出
 python scripts/health_check.py --fail-on-error --output report.json
@@ -398,10 +401,10 @@ docker compose pull && docker compose up -d
 
 ## 测试与评估
 
-### 单元测试（154 个用例）
+### 单元测试（160 个用例）
 
 ```bash
-# 后端（47 个）
+# 后端（53 个）
 python -m pytest backend/tests/ -v
 
 # AI/RAG（107 个）
@@ -508,6 +511,7 @@ ai-commerce-intelligence-platform/
 ├── docker-compose.yml            # Docker Compose 编排
 ├── Dockerfile                    # FastAPI 后端镜像
 ├── Dockerfile.streamlit          # Streamlit 镜像
+├── requirements.streamlit.txt    # BI 镜像精简运行时依赖
 └── requirements.txt              # 顶层依赖（可省略）
 ```
 
@@ -525,7 +529,7 @@ ai-commerce-intelligence-platform/
 | 缓存 | Redis 7 |
 | 反代 | Nginx |
 | 容器 | Docker + Docker Compose |
-| 测试 | pytest（47 个后端用例 + 107 个 RAG 用例 + 20 条 gold_qa 评估集） |
+| 测试 | pytest（53 个后端用例 + 107 个 RAG 用例 + 20 条 gold_qa 评估集） |
 
 ## License
 

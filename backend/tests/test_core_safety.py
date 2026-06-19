@@ -3,10 +3,13 @@ from types import SimpleNamespace
 
 import pytest
 
+from backend.config import Settings
+from backend.scripts.sync_orders import build_import_sql
 from backend.models.schemas import SalesOverviewResponse
 from backend.services.rfm_service import _score_users
 from backend.utils import cache
 from backend.utils.rate_limiter import _get_client_id
+from backend.utils.rfm_scoring import assign_segment, quantile_scores
 from backend.utils.sql_guard import is_read_only_sql
 
 
@@ -48,6 +51,20 @@ def test_rfm_recent_user_gets_lower_r_score():
     assert by_name["recent"]["r_score"] < by_name["old"]["r_score"]
     assert by_name["recent"]["segment"].startswith("重要")
     assert by_name["old"]["segment"].startswith("一般")
+
+
+def test_quantile_scores_handle_duplicate_boundaries():
+    values = [1] * 80 + [2] * 15 + [3] * 5
+    scores = quantile_scores(values, n_bins=5)
+
+    assert set(scores[:80]) == {1}
+    assert set(scores[80:95]) == {5}
+    assert set(scores[95:]) == {5}
+
+
+def test_shared_segment_semantics():
+    assert assign_segment(1, 5, 5, 3, 3, 3) == "重要价值客户"
+    assert assign_segment(5, 1, 1, 3, 3, 3) == "一般挽留客户"
 
 
 class _FakeRedis:
@@ -118,3 +135,31 @@ def test_proxy_headers_are_ignored_by_default():
     )
     assert _get_client_id(request) == "127.0.0.1"
     assert _get_client_id(request, trust_proxy_headers=True) == "203.0.113.9"
+
+
+@pytest.mark.parametrize(
+    ("jwt_secret", "admin_password"),
+    [
+        ("change-this-secret-in-production", "a-secure-admin-password"),
+        ("short", "a-secure-admin-password"),
+        ("a" * 32, "admin123"),
+    ],
+)
+def test_production_rejects_insecure_credentials(jwt_secret, admin_password):
+    with pytest.raises(ValueError):
+        Settings(
+            _env_file=None,
+            debug=False,
+            jwt_secret=jwt_secret,
+            admin_password=admin_password,
+        )
+
+
+def test_order_sync_targets_staging_table():
+    sql = (
+        "LOAD DATA INFILE '/var/lib/mysql-files/cleaned_orders.csv' "
+        "INTO TABLE orders"
+    )
+    result = build_import_sql(sql, "orders_staging")
+    assert "INTO TABLE orders_staging" in result
+    assert "INTO TABLE orders " not in result

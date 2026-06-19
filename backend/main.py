@@ -21,7 +21,7 @@ from backend.routes.monitor import (
     _load_rag_stats,
 )
 from backend.utils.rate_limiter import check_rate_limit
-from backend.utils.cache import init_redis, cleanup_memory_cache
+from backend.utils.cache import init_redis, cleanup_memory_cache, clear as clear_cache
 
 logging.basicConfig(
     level=logging.INFO,
@@ -63,6 +63,8 @@ async def lifespan(app: FastAPI):
     if settings.redis_enabled:
         redis_ok = init_redis(settings.redis_url)
         if redis_ok:
+            clear_cache()
+            logger.info("✅ Redis 缓存已清空，避免数据版本切换后命中旧值")
             logger.info("✅ Redis 缓存已启用")
         else:
             logger.warning("⚠️ Redis 连接失败，使用内存缓存降级模式")

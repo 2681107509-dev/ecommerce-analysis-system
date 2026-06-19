@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models.database_models import Order
 from backend.utils.cache import cached
+from backend.utils.rfm_scoring import assign_segment, quantile_scores
 
 logger = logging.getLogger(__name__)
 
@@ -20,47 +21,6 @@ _SEGMENT_PRIORITY = {
     "重要价值客户": 1, "重要发展客户": 2, "重要保持客户": 3, "重要挽留客户": 4,
     "一般价值客户": 5, "一般发展客户": 6, "一般保持客户": 7, "一般挽留客户": 8,
 }
-
-
-def _rfm_score(
-    r_val: int,
-    f_val: int,
-    m_val: int,
-    threshold: int = 3,
-) -> str:
-    """R 低分代表近期活跃，F/M 高分代表高频与高消费。"""
-    r_high = r_val <= threshold
-    f_high = f_val >= threshold
-    m_high = m_val >= threshold
-    if r_high and f_high and m_high:
-        return "重要价值客户"
-    if r_high and f_high and not m_high:
-        return "重要发展客户"
-    if r_high and not f_high and m_high:
-        return "重要保持客户"
-    if r_high and not f_high and not m_high:
-        return "重要挽留客户"
-    if not r_high and f_high and m_high:
-        return "一般价值客户"
-    if not r_high and f_high and not m_high:
-        return "一般发展客户"
-    if not r_high and not f_high and m_high:
-        return "一般保持客户"
-    return "一般挽留客户"
-
-
-def _quantile_score(values: list, val: float, n_bins: int = 5, reverse: bool = False) -> int:
-    if not values:
-        return 1
-    n = len(values)
-    # 所有维度先按值从低到高得到 1..n_bins。Recency 保持低分为优，
-    # Frequency/Monetary 同样保持高值高分。
-    for i in range(1, n_bins + 1):
-        threshold_idx = math.ceil(n * i / n_bins) - 1
-        threshold_idx = max(0, min(threshold_idx, n - 1))
-        if val <= values[threshold_idx]:
-            return i
-    return n_bins
 
 
 async def _fetch_rfm_raw(db: AsyncSession, ref_date) -> list[dict]:
@@ -94,21 +54,37 @@ def _score_users(users: list[dict], n_bins: int = 5) -> list[dict]:
     if not users:
         return users
 
-    recency_values = sorted(u["recency_days"] for u in users)
-    frequency_values = sorted(u["frequency"] for u in users)
-    monetary_values = sorted(u["monetary"] for u in users)
+    recency_scores = quantile_scores(
+        [u["recency_days"] for u in users],
+        n_bins,
+    )
+    frequency_scores = quantile_scores(
+        [u["frequency"] for u in users],
+        n_bins,
+    )
+    monetary_scores = quantile_scores(
+        [u["monetary"] for u in users],
+        n_bins,
+    )
 
     threshold = max(2, math.ceil(n_bins * 0.6))
-    for u in users:
-        u["r_score"] = _quantile_score(recency_values, u["recency_days"], n_bins, reverse=True)
-        u["f_score"] = _quantile_score(frequency_values, u["frequency"], n_bins, reverse=False)
-        u["m_score"] = _quantile_score(monetary_values, u["monetary"], n_bins, reverse=False)
+    for u, r_score, f_score, m_score in zip(
+        users,
+        recency_scores,
+        frequency_scores,
+        monetary_scores,
+    ):
+        u["r_score"] = r_score
+        u["f_score"] = f_score
+        u["m_score"] = m_score
         u["rfm_score"] = f"{u['r_score']}{u['f_score']}{u['m_score']}"
-        u["segment"] = _rfm_score(
+        u["segment"] = assign_segment(
             u["r_score"],
             u["f_score"],
             u["m_score"],
-            threshold=threshold,
+            threshold,
+            threshold,
+            threshold,
         )
 
     return users

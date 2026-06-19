@@ -38,7 +38,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from langchain_core.documents import Document  # noqa: E402
-from rag import VectorStore, get_embeddings, DEFAULT_PERSIST_DIR  # noqa: E402
+from rag import VectorStore, get_embeddings, DEFAULT_PERSIST_DIR, metrics  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -243,6 +243,23 @@ def build(kb_dir: str, persist_dir: str, rebuild: bool = False) -> dict:
         "vector_count": final_count,
         "elapsed_s": round(elapsed, 2),
     }
+    if metrics.load_stats() is None:
+        metrics.dump_combined_stats(
+            {
+                "cache_hits": 0,
+                "misses": 0,
+                "timeouts": 0,
+                "total_ms": 0.0,
+                "no_results": 0,
+                "score_buckets": {
+                    "[0,0.2)": 0,
+                    "[0.2,0.4)": 0,
+                    "[0.4,0.6)": 0,
+                    "[0.6,0.8)": 0,
+                    "[0.8,1.0]": 0,
+                },
+            }
+        )
     return report
 
 

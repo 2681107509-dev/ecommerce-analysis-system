@@ -256,6 +256,7 @@ def init_retriever():
         embed = get_embeddings()
         store = VectorStore(embedding=embed)
         retriever = Retriever(store, k=3, score_threshold=0.4)
+        retriever.dump_stats()
         return retriever, {
             "ok": True,
             "error": None,

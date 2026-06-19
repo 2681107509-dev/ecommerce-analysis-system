@@ -1,5 +1,5 @@
 -- AI Commerce Intelligence Platform - 首次导入清洗后的订单数据
--- docker-compose 将 CSV 只读挂载到 /var/lib/mysql-files/cleaned_orders.csv。
+-- docker-compose 将 CSV 挂载到 /var/lib/mysql-files/cleaned_orders.csv。
 
 LOAD DATA INFILE '/var/lib/mysql-files/cleaned_orders.csv'
 INTO TABLE orders

@@ -14,7 +14,9 @@ services:
       - mysql_data:/var/lib/mysql
       - ./sql/01_create_table.sql:/docker-entrypoint-initdb.d/01_create_table.sql:ro
       - ./sql/02_import_data.sql:/docker-entrypoint-initdb.d/02_import_data.sql:ro
-      - ./data/cleaned_orders.csv:/var/lib/mysql-files/cleaned_orders.csv:ro
+      # MySQL 官方 entrypoint 会对 /var/lib/mysql-files 执行 chown，
+      # 单文件只读挂载会导致容器启动失败。
+      - ./data/cleaned_orders.csv:/var/lib/mysql-files/cleaned_orders.csv
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_PASSWORD:-123456}"]
       interval: 10s
@@ -61,13 +63,14 @@ services:
       REDIS_ENABLED: "true"
       JWT_SECRET: ${JWT_SECRET:?请在根目录 .env 中设置 JWT_SECRET}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-change-this-admin-password}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?请在根目录 .env 中设置 ADMIN_PASSWORD}
       ANALYST_USERNAME: ${ANALYST_USERNAME:-analyst}
       ANALYST_PASSWORD: ${ANALYST_PASSWORD:-}
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_BASE_URL: ${LLM_BASE_URL:-https://api.deepseek.com}
       LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
       TRUST_PROXY_HEADERS: "true"
+      SYNC_ORDERS_ON_STARTUP: "true"
       RAG_STATS_PATH: /app/ai-ecommerce-assistant/data/rag_stats.json
       DEBUG: ${DEBUG:-false}
     volumes:
@@ -104,6 +107,7 @@ services:
       - --server.address=0.0.0.0
       - --server.headless=true
       - --server.baseUrlPath=/BI
+      - --browser.gatherUsageStats=false
     depends_on:
       mysql:
         condition: service_healthy
@@ -114,6 +118,8 @@ services:
     build:
       context: .
       dockerfile: ai-ecommerce-assistant/Dockerfile
+      entitlements:
+        - network.host
     container_name: ea-ai-assistant
     restart: unless-stopped
     environment:
@@ -136,6 +142,7 @@ services:
         --server.address=0.0.0.0
         --server.headless=true
         --server.baseUrlPath=/ai
+        --browser.gatherUsageStats=false
     volumes:
       - huggingface_cache:/root/.cache/huggingface
       - chroma_data:/app/ai-ecommerce-assistant/data
