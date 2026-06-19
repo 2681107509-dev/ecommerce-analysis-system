@@ -61,7 +61,6 @@ jobs:
   backend-tests:
     name: 后端测试 (Python 3.12)
     runs-on: ubuntu-latest
-    # P6.10 修复：test_api.py 改用 authed_client（自动注入 JWT），原 client 调需鉴权接口会 401
     services:
       mysql:
         image: mysql:8.0
@@ -88,18 +87,15 @@ jobs:
         with:
           python-version: '3.12'
           cache: 'pip'
-          cache-dependency-path: backend/requirements.txt
-
-      - name: 安装系统依赖
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y default-libmysqlclient-dev gcc
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
 
       - name: 安装后端依赖
         working-directory: backend
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
 
       - name: 等待 MySQL 就绪
         run: |
@@ -130,10 +126,7 @@ jobs:
           EOF
 
       - name: 初始化 schema
-        # P6.11 修复 v2：第一次用 bash heredoc + PYTHONPATH，CI 1 秒挂但拿不到
-        # stderr。改用独立脚本：脚本首行 sys.path.insert(repo root)，
-        # 不依赖 PYTHONPATH/working-directory。stderr 走 tee 落盘到 /tmp，
-        # 失败时 artifact 可下载。
+        # 独立初始化脚本不依赖 PYTHONPATH；日志落盘后作为 artifact 上传。
         working-directory: backend
         run: |
           python scripts/init_ci_schema.py 2>&1 | tee /tmp/init_schema.log

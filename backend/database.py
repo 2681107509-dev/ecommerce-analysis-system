@@ -11,7 +11,8 @@ engine = create_async_engine(
     pool_size=settings.db_pool_size,
     max_overflow=settings.db_max_overflow,
     pool_recycle=settings.db_pool_recycle,
-    pool_pre_ping=True,  # P6.8 修复：每次取连接前先 SELECT 1，避免 aiomysql 在 Windows ProactorEventLoop 上的连接池 reset 崩溃（AttributeError: 'NoneType' object has no attribute 'send'）
+    # 连接取出前主动探活，避免复用 MySQL 已关闭的空闲连接。
+    pool_pre_ping=True,
     echo=settings.debug,
 )
 

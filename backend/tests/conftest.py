@@ -8,9 +8,7 @@ import pytest
 
 
 def pytest_configure(config):
-    """P6.10 修复：Windows 默认 ProactorEventLoop 上 aiomysql + pytest-asyncio
-    多 test 跑会触发 AttributeError: 'NoneType' object has no attribute 'send'。
-    必须在 pytest 启动前改 loop policy，否则 pytest-asyncio 已建好 Proactor loop。"""
+    """Windows 使用 Selector loop，避免 aiomysql 测试连接跨事件循环失效。"""
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
@@ -19,8 +17,7 @@ def pytest_configure(config):
 def _reset_rate_limiter():
     """每个测试前后清空限流计数。
 
-    P6.10 修复：/api/auth/login 默认 5 次/分钟，pytest 跑多个 test
-    会触发 429 导致 authed_client fixture 拿不到 token。
+    登录接口默认有限流；测试间共享计数会导致后续 fixture 意外收到 429。
     """
     from backend.utils import rate_limiter
     rate_limiter._rate_store.clear()

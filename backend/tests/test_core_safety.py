@@ -1,3 +1,4 @@
+import asyncio
 from inspect import Signature, signature
 from types import SimpleNamespace
 
@@ -6,7 +7,12 @@ import pytest
 from backend.config import Settings
 from backend.scripts.sync_orders import build_import_sql
 from backend.models.schemas import SalesOverviewResponse
-from backend.services.rfm_service import _score_users
+from backend.services import rfm_service
+from backend.services.rfm_service import (
+    _score_users,
+    _summary_from_snapshot,
+    get_rfm_top_users,
+)
 from backend.utils import cache
 from backend.utils.rate_limiter import _get_client_id
 from backend.utils.rfm_scoring import assign_segment, quantile_scores
@@ -65,6 +71,63 @@ def test_quantile_scores_handle_duplicate_boundaries():
 def test_shared_segment_semantics():
     assert assign_segment(1, 5, 5, 3, 3, 3) == "重要价值客户"
     assert assign_segment(5, 1, 1, 3, 3, 3) == "一般挽留客户"
+
+
+def test_rfm_redis_summary_excludes_full_user_lists():
+    snapshot = {
+        "reference_date": "2024-01-01",
+        "total_users": 1,
+        "n_bins": 5,
+        "score_threshold": 3,
+        "averages": {"recency_days": 1, "frequency": 2, "monetary": 100},
+        "segments": [],
+        "users": [{"user_name": "u1"}],
+        "sorted_users": [{"user_name": "u1"}],
+    }
+
+    summary = _summary_from_snapshot(snapshot)
+
+    assert "users" not in summary
+    assert "sorted_users" not in summary
+    assert summary["total_users"] == 1
+
+
+@pytest.mark.asyncio
+async def test_rfm_snapshot_prevents_concurrent_recalculation(monkeypatch):
+    rfm_service.clear_rfm_snapshot_cache()
+    calls = 0
+
+    async def fake_build(_db, reference_date=None, n_bins=5):
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(0)
+        return {"reference_date": "2024-01-01", "total_users": 0}
+
+    monkeypatch.setattr(rfm_service, "_build_rfm_snapshot", fake_build)
+    results = await asyncio.gather(
+        *[rfm_service._get_rfm_snapshot(object()) for _ in range(5)]
+    )
+
+    assert calls == 1
+    assert len(results) == 5
+    rfm_service.clear_rfm_snapshot_cache()
+
+
+@pytest.mark.asyncio
+async def test_rfm_top_users_honors_requested_limit(monkeypatch):
+    users = [{"user_name": f"u{i}"} for i in range(100)]
+
+    async def fake_snapshot(_db, reference_date=None, n_bins=5):
+        return {
+            "reference_date": "2024-01-01",
+            "total_users": 100,
+            "sorted_users": users,
+        }
+
+    monkeypatch.setattr(rfm_service, "_get_rfm_snapshot", fake_snapshot)
+    result = await get_rfm_top_users.__wrapped__(object(), limit=100)
+
+    assert len(result["top_users"]) == 100
 
 
 class _FakeRedis:

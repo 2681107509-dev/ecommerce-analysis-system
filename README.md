@@ -43,7 +43,7 @@ git clone https://github.com/super-ZXQ/ai-commerce-intelligence-platform.git
 cd ai-commerce-intelligence-platform
 
 cp deploy/.env.example .env
-# 编辑 .env 填入 MySQL 密码、JWT Secret、LLM API Key
+# 编辑 .env 填入四类 MySQL 密码、JWT Secret、LLM API Key
 
 docker compose up -d --build
 docker compose ps
@@ -57,6 +57,7 @@ docker compose up -d
 ├── ea-streamlit    → BI 看板 (Docker 内网 :8501)
 ├── ea-backend      → FastAPI (Docker 内网 :8000)
 ├── ea-ai-assistant → AI 助手 (Docker 内网 :8502, baseUrlPath=/ai)
+├── ea-db-bootstrap → 一次性创建最小权限数据库账号
 ├── ea-mysql        → MySQL 8.0 (Docker 内网 :3306) + 自动建表
 └── ea-redis        → Redis 7 Alpine (Docker 内网 :6379) + AOF持久化 + LRU淘汰
 ```
@@ -74,7 +75,7 @@ docker compose up -d
 | `/health` `/health/detailed` `/metrics` | backend:8000 | 公开健康检查与 Prometheus 指标 |
 | `/demo` `/monitor` `/health-panel` | backend:8000 | 系统页面 |
 
-部署模式下仅 Nginx 对宿主机暴露 80 端口，业务服务、数据库和缓存只通过 Docker 内部网络通信。后端启动前会按 CSV SHA-256 校验订单版本；数据变化时先导入临时表、校验行数，再原子替换正式表。AI 助手的 Chroma 数据与 RAG 指标快照写入命名卷 `chroma_data`，后端以只读方式挂载同一卷用于监控。Nginx 已配置 `proxy_http_version 1.1`、`Upgrade` 和 `Connection` 头，支持 Streamlit WebSocket，避免反向代理后页面白屏。
+部署模式下仅 Nginx 对宿主机暴露 80 端口，业务服务、数据库和缓存只通过 Docker 内部网络通信。`db-bootstrap` 会为 API、AI 和数据同步分别创建最小权限账号；API 与 AI 仅有查询权限。后端启动前会按 CSV SHA-256 校验订单版本；数据变化时先导入临时表、校验行数，再原子替换正式表。RFM 完整用户明细使用后端进程内有界快照复用，Redis 只保存小型汇总结果，避免产生十几 MB 的单 Key。AI 助手的 Chroma 数据与 RAG 指标快照写入命名卷 `chroma_data`，后端以只读方式挂载同一卷用于监控。Nginx 已配置 `proxy_http_version 1.1`、`Upgrade` 和 `Connection` 头，支持 Streamlit WebSocket，避免反向代理后页面白屏。
 
 ### 本地开发
 
@@ -86,7 +87,7 @@ python -m venv .venv && .venv\Scripts\activate
 
 pip install -r requirements.txt
 pip install -r ai-ecommerce-assistant/requirements.txt
-pip install -r backend/requirements.txt
+pip install -r backend/requirements-dev.txt
 ```
 
 **配置环境变量：**
@@ -303,7 +304,7 @@ rag_tool_call_total 18
 
 | Workflow | 触发 | 职责 |
 |----------|------|------|
-| `.github/workflows/ci.yml` | PR / push main | AI 助手 107 个测试（Python 3.12 + 3.13 矩阵）+ 后端 53 个测试（带 MySQL service container + 最小 seed）+ 语法检查 |
+| `.github/workflows/ci.yml` | PR / push main | AI 助手 107 个测试（Python 3.12 + 3.13 矩阵）+ 后端 56 个测试（带 MySQL service container + 最小 seed）+ 语法检查 |
 | `.github/workflows/release.yml` | push main / tag `v*.*.*` / 手动 | 构建 backend / streamlit / ai-assistant 三个 Docker 镜像，**多架构**（linux/amd64 + linux/arm64），推送到 `ghcr.io/super-zxq/ai-commerce-intelligence-platform-{backend,streamlit,ai-assistant}` |
 
 **Tag 策略**（由 `docker/metadata-action` 自动管理）：
@@ -401,10 +402,10 @@ docker compose pull && docker compose up -d
 
 ## 测试与评估
 
-### 单元测试（160 个用例）
+### 单元测试（163 个用例）
 
 ```bash
-# 后端（53 个）
+# 后端（56 个）
 python -m pytest backend/tests/ -v
 
 # AI/RAG（107 个）
@@ -475,9 +476,11 @@ ai-commerce-intelligence-platform/
 │   ├── static/                   # HTML 静态页
 │   ├── sql/                      # SQL 脚本
 │   ├── scripts/                  # CI / 工具脚本
-│   │   └── init_ci_schema.py     # CI 建表 + 5 条 fake orders seed
+│   │   ├── init_ci_schema.py     # CI 建表 + 5 条 fake orders seed
+│   │   └── sync_orders.py        # CSV 哈希校验 + 原子换表
 │   ├── tests/                    # API 单元测试
-│   └── requirements.txt
+│   ├── requirements.txt          # 后端生产依赖
+│   └── requirements-dev.txt      # 后端测试与静态检查依赖
 ├── streamlit_app.py              # BI 数据看板（Streamlit 多页面）
 ├── ai-ecommerce-assistant/        # AI 分析助手（含 RAG）
 │   ├── app.py                    # 主应用
@@ -504,6 +507,8 @@ ai-commerce-intelligence-platform/
 ├── deploy/                       # 部署配置
 │   ├── nginx.conf                # Nginx 反向代理
 │   ├── redis.conf                # Redis 持久化配置
+│   ├── mysql/
+│   │   └── bootstrap-users.sh    # 创建最小权限数据库账号
 │   └── .env.example              # 环境变量模板
 ├── data/                         # 数据文件
 ├── sql/                          # 建表/导入/分析脚本
@@ -512,7 +517,7 @@ ai-commerce-intelligence-platform/
 ├── Dockerfile                    # FastAPI 后端镜像
 ├── Dockerfile.streamlit          # Streamlit 镜像
 ├── requirements.streamlit.txt    # BI 镜像精简运行时依赖
-└── requirements.txt              # 顶层依赖（可省略）
+└── requirements.txt              # Notebook / 本地数据分析依赖
 ```
 
 ## 技术栈
@@ -529,7 +534,7 @@ ai-commerce-intelligence-platform/
 | 缓存 | Redis 7 |
 | 反代 | Nginx |
 | 容器 | Docker + Docker Compose |
-| 测试 | pytest（53 个后端用例 + 107 个 RAG 用例 + 20 条 gold_qa 评估集） |
+| 测试 | pytest（56 个后端用例 + 107 个 RAG 用例 + 20 条 gold_qa 评估集） |
 
 ## License
 

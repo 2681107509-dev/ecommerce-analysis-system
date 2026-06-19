@@ -1,5 +1,8 @@
+import asyncio
 import logging
 import math
+import time
+from collections import OrderedDict
 from datetime import datetime
 from typing import Optional
 
@@ -21,6 +24,13 @@ _SEGMENT_PRIORITY = {
     "重要价值客户": 1, "重要发展客户": 2, "重要保持客户": 3, "重要挽留客户": 4,
     "一般价值客户": 5, "一般发展客户": 6, "一般保持客户": 7, "一般挽留客户": 8,
 }
+
+# 完整用户明细只缓存在当前进程，避免把 7 万+ 用户序列化为超大 Redis Key。
+# Docker 当前使用单 Worker；若未来扩容为多 Worker，各进程会各自维护一份有界快照。
+_SNAPSHOT_TTL_SECONDS = 600
+_SNAPSHOT_MAX_ENTRIES = 8
+_snapshot_cache: OrderedDict[tuple[Optional[str], int], dict] = OrderedDict()
+_snapshot_locks: dict[tuple[Optional[str], int], asyncio.Lock] = {}
 
 
 async def _fetch_rfm_raw(db: AsyncSession, ref_date) -> list[dict]:
@@ -112,12 +122,12 @@ def _build_segments(users: list[dict]) -> list[dict]:
     return segments
 
 
-@cached(ttl=600)
-async def compute_rfm(
+async def _build_rfm_snapshot(
     db: AsyncSession,
     reference_date: Optional[str] = None,
     n_bins: int = 5,
 ) -> dict:
+    """计算一份完整 RFM 快照，供汇总、分页和 TOP 用户共同复用。"""
     if reference_date:
         ref_date = datetime.strptime(reference_date, "%Y-%m-%d").date()
     else:
@@ -160,9 +170,82 @@ async def compute_rfm(
             "monetary": avg_monetary,
         },
         "segments": segments,
-        "all_users": users,
-        "top_users": sorted_users[:20],
+        "users": users,
+        "sorted_users": sorted_users,
     }
+
+
+async def _get_rfm_snapshot(
+    db: AsyncSession,
+    reference_date: Optional[str] = None,
+    n_bins: int = 5,
+) -> dict:
+    """获取有界、带 TTL 的进程内快照，防止并发请求重复执行重计算。"""
+    key = (reference_date, n_bins)
+    now = time.monotonic()
+    cached_snapshot = _snapshot_cache.get(key)
+    if cached_snapshot and cached_snapshot["expires_at"] > now:
+        _snapshot_cache.move_to_end(key)
+        return cached_snapshot["data"]
+
+    lock = _snapshot_locks.setdefault(key, asyncio.Lock())
+    async with lock:
+        now = time.monotonic()
+        cached_snapshot = _snapshot_cache.get(key)
+        if cached_snapshot and cached_snapshot["expires_at"] > now:
+            _snapshot_cache.move_to_end(key)
+            return cached_snapshot["data"]
+
+        snapshot = await _build_rfm_snapshot(
+            db,
+            reference_date=reference_date,
+            n_bins=n_bins,
+        )
+        _snapshot_cache[key] = {
+            "data": snapshot,
+            "expires_at": now + _SNAPSHOT_TTL_SECONDS,
+        }
+        _snapshot_cache.move_to_end(key)
+
+        while len(_snapshot_cache) > _SNAPSHOT_MAX_ENTRIES:
+            expired_key, _ = _snapshot_cache.popitem(last=False)
+            _snapshot_locks.pop(expired_key, None)
+        return snapshot
+
+
+def clear_rfm_snapshot_cache() -> None:
+    """清空 RFM 进程内快照；数据源变更后调用。"""
+    _snapshot_cache.clear()
+    _snapshot_locks.clear()
+
+
+def _summary_from_snapshot(snapshot: dict) -> dict:
+    """提取适合 Redis 缓存和 API 返回的小型汇总对象。"""
+    if "error" in snapshot:
+        return snapshot
+    return {
+        "reference_date": snapshot["reference_date"],
+        "total_users": snapshot["total_users"],
+        "n_bins": snapshot["n_bins"],
+        "score_threshold": snapshot["score_threshold"],
+        "averages": snapshot["averages"],
+        "segments": snapshot["segments"],
+    }
+
+
+@cached(ttl=600)
+async def compute_rfm(
+    db: AsyncSession,
+    reference_date: Optional[str] = None,
+    n_bins: int = 5,
+) -> dict:
+    """返回 RFM 汇总；Redis 中不再保存完整用户明细。"""
+    snapshot = await _get_rfm_snapshot(
+        db,
+        reference_date=reference_date,
+        n_bins=n_bins,
+    )
+    return _summary_from_snapshot(snapshot)
 
 
 @cached(ttl=300)
@@ -174,11 +257,15 @@ async def get_rfm_segment_detail(
     reference_date: Optional[str] = None,
     n_bins: int = 5,
 ) -> dict:
-    rfm_data = await compute_rfm(db, reference_date=reference_date, n_bins=n_bins)
-    if "error" in rfm_data:
-        return rfm_data
+    snapshot = await _get_rfm_snapshot(
+        db,
+        reference_date=reference_date,
+        n_bins=n_bins,
+    )
+    if "error" in snapshot:
+        return snapshot
 
-    users = rfm_data.get("all_users", [])
+    users = snapshot.get("users", [])
     if not users:
         return {"error": "无有效付款订单数据", "total_users": 0}
 
@@ -196,6 +283,28 @@ async def get_rfm_segment_detail(
         "page_size": page_size,
         "total_pages": (total + page_size - 1) // page_size,
         "users": page_users,
+    }
+
+
+@cached(ttl=300)
+async def get_rfm_top_users(
+    db: AsyncSession,
+    limit: int = 20,
+    reference_date: Optional[str] = None,
+    n_bins: int = 5,
+) -> dict:
+    """按 RFM 价值顺序返回指定数量用户，正确支持 1-100 条。"""
+    snapshot = await _get_rfm_snapshot(
+        db,
+        reference_date=reference_date,
+        n_bins=n_bins,
+    )
+    if "error" in snapshot:
+        return snapshot
+    return {
+        "reference_date": snapshot["reference_date"],
+        "total_users": snapshot["total_users"],
+        "top_users": snapshot["sorted_users"][:limit],
     }
 
 

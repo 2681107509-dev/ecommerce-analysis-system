@@ -10,8 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, PlainTextResponse
 
 from backend.config import get_settings
-from backend.database import engine, Base, check_db_connection
-from backend.models.database_models import Order  # noqa: F401 - 注册 ORM 模型
+from backend.database import engine, check_db_connection
 from backend.routes import orders, products, analytics, ai, export, auth, monitor, rfm
 from backend.routes.monitor import record_request
 from backend.routes.monitor import (
@@ -49,16 +48,10 @@ async def _cache_cleanup_task():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("🚀 AI Commerce Intelligence Platform v%s 启动中...", settings.app_version)
-    try:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        logger.info("✅ 数据库表检查完成")
-    except Exception as e:
-        # P6.8 修复：aiomysql 在 Windows ProactorEventLoop 上偶发池 reset 崩溃
-        # （AttributeError: 'NoneType' object has no attribute 'send'），但 create_all 的 SQL
-        # 实际已执行成功。降级为 warning 而非致命错误，保证服务能起。
-        logger.warning(f"⚠️ 数据库连接池清理异常（已忽略）: {type(e).__name__}: {e}")
-        logger.warning("API 将以无数据库模式启动，数据相关接口将返回错误")
+    if not await check_db_connection():
+        # 生产 API 不应以“表面存活、业务接口全部失败”的状态继续运行。
+        raise RuntimeError("数据库连接失败，终止后端启动")
+    logger.info("✅ 数据库连接检查完成")
 
     if settings.redis_enabled:
         redis_ok = init_redis(settings.redis_url)

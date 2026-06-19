@@ -56,8 +56,7 @@ def main() -> None:
     sess = Sess()
     for i in range(1, 6):
         sess.add(Order(
-            # P6.11 修复 v3：ORM Python 属性名是 order_no，列名是 order_id
-            # 之前用 order_id=... → TypeError: 'order_id' is an invalid keyword
+            # 使用 ORM 属性名赋值，SQLAlchemy 会映射到实际数据库列名。
             order_no=f"CI{i:05d}",
             user_name=f"user_{i % 3}",
             product_id=f"P{i:03d}",
@@ -67,7 +66,6 @@ def main() -> None:
             platform_type="APP" if i % 2 else "Web网站",
             order_time=datetime(2026, 6, 1, 10, 0, 0),
             payment_time=datetime(2026, 6, 1, 10, 5, 0),
-            # P6.11 修复 v3：ORM Python 属性是 is_refunded（列名是 is_refund）
             is_refunded="否",
             discount_amount=Decimal("5.00"),
             payment_duration_sec=300,

@@ -214,7 +214,7 @@ async def get_category_analysis(db: AsyncSession) -> CategoryAnalysisResponse:
                 platform_type=row.platform_type,
                 order_count=row.order_count,
                 total_sales=round(float(row.total_sales), 2),
-                # P6.10 修复：MySQL SUM() 返回 Decimal；分子分母都强转 float 再除
+                # MySQL 聚合金额返回 Decimal，统一转为 float 后再计算百分比。
                 sales_ratio=round(float(row.total_sales) / float(total_sales) * 100, 2),
                 avg_order_value=round(float(row.avg_order_value), 2),
                 refund_rate=round(float(row.refund_rate), 2),

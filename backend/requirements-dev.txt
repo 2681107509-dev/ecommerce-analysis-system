@@ -1,0 +1,6 @@
+-r requirements.txt
+
+# 测试和静态检查工具不进入生产镜像。
+pytest==9.1.0
+pytest-asyncio==1.4.0
+ruff==0.15.17

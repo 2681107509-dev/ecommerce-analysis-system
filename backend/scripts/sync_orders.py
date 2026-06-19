@@ -53,13 +53,17 @@ def build_import_sql(sql_template: str, table_name: str) -> str:
 
 
 def connect_with_retry(max_attempts: int = 30):
-    password = os.getenv("DB_PASSWORD", "")
+    # 数据同步需要建临时表和原子换表，使用独立账号，不复用 API 只读账号。
+    password = os.getenv("DB_SYNC_PASSWORD", os.getenv("DB_PASSWORD", ""))
     for attempt in range(1, max_attempts + 1):
         try:
             return pymysql.connect(
                 host=os.getenv("DB_HOST", "mysql"),
                 port=int(os.getenv("DB_PORT", "3306")),
-                user=os.getenv("DB_USER", "root"),
+                user=os.getenv(
+                    "DB_SYNC_USER",
+                    os.getenv("DB_USER", "root"),
+                ),
                 password=password,
                 database=os.getenv(
                     "DB_NAME",

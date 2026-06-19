@@ -5,13 +5,10 @@ from httpx import ASGITransport, AsyncClient
 from backend.main import app
 
 
-# P6.10 修复：原 session-scope event_loop 会让 aiomysql 连接在
-# 第一个 test 关闭 loop 后挂到第二个 test 的新 loop 上，
-# 触发 AttributeError: 'NoneType' object has no attribute 'send'
-# 改为 None（pytest-asyncio 自动按 function-scope 创建新 loop）
+# 每个测试使用独立事件循环，避免 aiomysql 连接跨 loop 复用。
 @pytest.fixture
 def event_loop():
-    """P6.10: 每 test 一个新 loop，避免 aiomysql 跨 loop 句柄泄漏。"""
+    """每个测试创建独立事件循环。"""
     import asyncio
     loop = asyncio.new_event_loop()
     yield loop
@@ -29,7 +26,6 @@ async def client():
 async def authed_client():
     """带 JWT 鉴权的 client fixture。
 
-    P6.10 修复：原 client 调需鉴权接口会 401。
     统一在此登录 admin/admin123，注入 Authorization 头。
     """
     transport = ASGITransport(app=app)
@@ -49,7 +45,7 @@ async def auth_token(client: AsyncClient):
 class TestSystem:
     @pytest.mark.asyncio
     async def test_root(self, client: AsyncClient):
-        # P6.10 修复：根路径返回 index.html，不是 JSON
+        # 根路径返回导航页 HTML。
         r = await client.get("/")
         assert r.status_code == 200
         assert "text/html" in r.headers["content-type"]
@@ -231,7 +227,7 @@ class TestExport:
 
     @pytest.mark.asyncio
     async def test_export_analytics_excel(self, authed_client: AsyncClient):
-        # P6.10 修复：后端参数名是 export_format，测试用 format 会被默认 csv 分支接走
+        # Excel 导出使用明确的 export_format 参数。
         r = await authed_client.get("/api/export/analytics?export_format=excel")
         assert r.status_code == 200
         assert "spreadsheet" in r.headers.get("content-type", "")

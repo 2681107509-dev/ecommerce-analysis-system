@@ -7,7 +7,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import get_db
 from backend.routes.auth import get_current_user
-from backend.services.rfm_service import compute_rfm, get_rfm_segment_detail, get_rfm_overview, VALID_SEGMENTS
+from backend.services.rfm_service import (
+    VALID_SEGMENTS,
+    compute_rfm,
+    get_rfm_overview,
+    get_rfm_segment_detail,
+    get_rfm_top_users,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -75,12 +81,7 @@ async def rfm_top_users(
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    result = await compute_rfm(db)
+    result = await get_rfm_top_users(db, limit=limit)
     if "error" in result:
         raise HTTPException(status_code=500, detail=result["error"])
-    top_users = result.get("top_users", [])
-    return {
-        "reference_date": result["reference_date"],
-        "total_users": result["total_users"],
-        "top_users": top_users[:limit],
-    }
+    return result
