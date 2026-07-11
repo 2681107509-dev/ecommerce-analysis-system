@@ -213,12 +213,15 @@ elif page == "👥 RFM 客户分层":
 
     _user_stats = paid_df.groupby('用户名').agg(
         order_count=('订单号', 'nunique'),
-        total_amount=('付款金额', 'sum')
+        total_amount=('付款金额', 'sum'),
+        latest_order_time=('下单时间', 'max'),
     ).reset_index()
     _cache_key = hash((
         tuple(paid_df['用户名'].values),
         tuple(_user_stats['order_count'].values),
         tuple(_user_stats['total_amount'].round(2).values),
+        # R 值依赖最近下单时间，日期变化也必须触发重新计算。
+        tuple(_user_stats['latest_order_time'].astype('int64').values),
     ))
     rfm = _score_rfm_frame(paid_df, ref_date_input, n_bins, _cache_key)
 

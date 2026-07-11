@@ -229,4 +229,13 @@ def cleanup_memory_cache() -> int:
     for k in expired:
         del _memory_cache[k]
         _cache_locks.pop(k, None)
+
+    # Redis 模式没有本地缓存条目，但每个唯一请求仍会创建一次防击穿锁。
+    # 仅清理未持有的孤立锁，避免高基数请求导致锁字典持续增长。
+    orphan_locks = [
+        key for key, lock in _cache_locks.items()
+        if key not in _memory_cache and not lock.locked()
+    ]
+    for key in orphan_locks:
+        _cache_locks.pop(key, None)
     return len(expired)

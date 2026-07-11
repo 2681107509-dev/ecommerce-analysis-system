@@ -235,6 +235,24 @@ async def test_cached_function_without_return_annotation(monkeypatch):
     assert calls == 1
 
 
+@pytest.mark.asyncio
+async def test_cache_cleanup_removes_idle_redis_locks(monkeypatch):
+    fake = _FakeRedis()
+    monkeypatch.setattr(cache, "_redis_client", fake)
+    monkeypatch.setattr(cache, "_redis_available", True)
+    cache._memory_cache.clear()
+    cache._cache_locks.clear()
+
+    @cache.cached(ttl=60)
+    async def get_data():
+        return {"ok": True}
+
+    await get_data()
+    assert len(cache._cache_locks) == 1
+    assert cache.cleanup_memory_cache() == 0
+    assert not cache._cache_locks
+
+
 def test_proxy_headers_are_ignored_by_default():
     request = SimpleNamespace(
         headers={"x-real-ip": "203.0.113.9"},

@@ -1198,9 +1198,15 @@ for msg_idx, msg in enumerate(st.session_state.messages):
                     rag_sources=msg.get("rag_sources", []),
                 )
                 st.info("我们会持续优化，谢谢反馈！")
+
+            # 按钮点击会触发整页重跑；根据已保存的反馈状态持续显示重新生成入口。
+            if st.session_state.feedbacks.get(feedback_key) == "👎 需改进":
                 if st.button("🔄 重新生成", key=f"regen_{msg_idx}", use_container_width=True):
                     st.session_state.pending_question = msg["question"]
-                    if f"msg_{msg_idx}" in st.session_state.messages:
+                    # 替换这一轮问答，避免重新生成后在对话记录中出现重复内容。
+                    if msg_idx > 0 and st.session_state.messages[msg_idx - 1].get("role") == "user":
+                        del st.session_state.messages[msg_idx - 1:msg_idx + 1]
+                    else:
                         st.session_state.messages.pop(msg_idx)
                     st.rerun()
 
