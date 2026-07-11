@@ -1,3 +1,4 @@
+import csv
 import io
 import logging
 from datetime import date
@@ -19,6 +20,70 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/export", tags=["数据导出"])
 
 _EXPORT_CHUNK_SIZE = 5000
+_ORDER_EXPORT_HEADERS = [
+    "订单编号", "订单号", "用户名", "商品编号", "订单金额", "付款金额",
+    "平台类型", "下单时间", "付款时间", "是否退款", "优惠金额",
+]
+
+
+def _order_export_row(order: Order) -> list:
+    """将 ORM 订单转换为导出列，CSV 与 Excel 共用同一字段顺序。"""
+    return [
+        order.id,
+        order.order_no,
+        order.user_name,
+        order.product_id,
+        order.order_amount,
+        order.payment_amount,
+        order.platform_type,
+        str(order.order_time),
+        str(order.payment_time) if order.payment_time else "",
+        order.is_refunded,
+        order.discount_amount,
+    ]
+
+
+async def _iter_order_chunks(
+    db: AsyncSession,
+    conditions: list,
+    total: int,
+):
+    """按固定大小读取订单，避免一次性加载整个导出结果。"""
+    offset = 0
+    while offset < total:
+        stmt = (
+            select(Order)
+            .where(*conditions)
+            .order_by(Order.order_time.desc())
+            .offset(offset)
+            .limit(_EXPORT_CHUNK_SIZE)
+        )
+        result = await db.execute(stmt)
+        rows = result.scalars().all()
+        if not rows:
+            break
+        yield rows
+        offset += len(rows)
+        logger.info("导出进度: %s/%s", min(offset, total), total)
+
+
+async def _stream_orders_csv(
+    db: AsyncSession,
+    conditions: list,
+    total: int,
+):
+    """逐块生成 UTF-8 BOM CSV，首字节可在首批数据库结果返回后发送。"""
+    yield "\ufeff".encode("utf-8")
+
+    header_buffer = io.StringIO()
+    csv.writer(header_buffer, lineterminator="\n").writerow(_ORDER_EXPORT_HEADERS)
+    yield header_buffer.getvalue().encode("utf-8")
+
+    async for rows in _iter_order_chunks(db, conditions, total):
+        chunk_buffer = io.StringIO()
+        writer = csv.writer(chunk_buffer, lineterminator="\n")
+        writer.writerows(_order_export_row(order) for order in rows)
+        yield chunk_buffer.getvalue().encode("utf-8")
 
 
 @router.get("/orders", summary="导出订单数据")
@@ -58,38 +123,18 @@ async def export_orders(
             "message": "没有符合条件的订单数据",
         }
 
-    all_data: list[dict] = []
-    offset = 0
-    while offset < total:
-        stmt = (
-            select(Order)
-            .where(*conditions)
-            .order_by(Order.order_time.desc())
-            .offset(offset)
-            .limit(_EXPORT_CHUNK_SIZE)
+    if export_format == "csv":
+        return StreamingResponse(
+            _stream_orders_csv(db, conditions, total),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=orders_export.csv"},
         )
-        result = await db.execute(stmt)
-        rows = result.scalars().all()
-        if not rows:
-            break
-        for o in rows:
-            all_data.append({
-                "订单编号": o.id,
-                "订单号": o.order_no,
-                "用户名": o.user_name,
-                "商品编号": o.product_id,
-                "订单金额": o.order_amount,
-                "付款金额": o.payment_amount,
-                "平台类型": o.platform_type,
-                "下单时间": str(o.order_time),
-                "付款时间": str(o.payment_time) if o.payment_time else "",
-                "是否退款": o.is_refunded,
-                "优惠金额": o.discount_amount,
-            })
-        offset += len(rows)
-        logger.info(f"导出进度: {min(offset, total)}/{total}")
 
-    df = pd.DataFrame(all_data)
+    # Excel 格式需要先构建完整工作簿；CSV 使用上方流式路径避免大对象驻留内存。
+    all_data: list[list] = []
+    async for rows in _iter_order_chunks(db, conditions, total):
+        all_data.extend(_order_export_row(order) for order in rows)
+    df = pd.DataFrame(all_data, columns=_ORDER_EXPORT_HEADERS)
 
     if export_format == "excel":
         buffer = io.BytesIO()
@@ -101,16 +146,6 @@ async def export_orders(
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             headers={"Content-Disposition": "attachment; filename=orders_export.xlsx"},
         )
-
-    csv_buffer = io.StringIO()
-    df.to_csv(csv_buffer, index=False, encoding="utf-8-sig")
-    csv_buffer.seek(0)
-    return StreamingResponse(
-        io.BytesIO(csv_buffer.getvalue().encode("utf-8-sig")),
-        media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=orders_export.csv"},
-    )
-
 
 @router.get("/analytics", summary="导出分析报告")
 async def export_analytics(

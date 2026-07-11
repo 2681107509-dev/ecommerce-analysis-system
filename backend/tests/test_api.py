@@ -225,6 +225,22 @@ class TestAI:
 
 class TestExport:
     @pytest.mark.asyncio
+    async def test_export_orders_csv_stream(self, authed_client: AsyncClient):
+        r = await authed_client.get("/api/export/orders?export_format=csv")
+        assert r.status_code == 200
+        assert "text/csv" in r.headers["content-type"]
+        assert r.content.startswith("\ufeff订单编号".encode("utf-8"))
+        assert "attachment; filename=orders_export.csv" in r.headers["content-disposition"]
+
+    @pytest.mark.asyncio
+    async def test_export_orders_excel(self, authed_client: AsyncClient):
+        r = await authed_client.get("/api/export/orders?export_format=excel")
+        assert r.status_code == 200
+        assert "spreadsheetml.sheet" in r.headers["content-type"]
+        assert r.content.startswith(b"PK")
+        assert "attachment; filename=orders_export.xlsx" in r.headers["content-disposition"]
+
+    @pytest.mark.asyncio
     async def test_export_analytics_csv(self, authed_client: AsyncClient):
         r = await authed_client.get("/api/export/analytics?format=csv")
         assert r.status_code == 200
