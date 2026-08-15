@@ -200,12 +200,12 @@ async def get_rag_stats():
     """
     stats = _load_rag_stats()
     if stats is None:
+        # 不回显服务器绝对路径，避免向公网暴露部署目录结构
         return JSONResponse(
             status_code=503,
             content={
                 "status": "unavailable",
                 "detail": "RAG stats 文件尚未生成（AI 助手可能未启动或未发生检索）",
-                "path": _RAG_STATS_PATH,
             },
         )
     return {"status": "ok", "stats": stats}

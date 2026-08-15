@@ -21,6 +21,7 @@ from backend.routes.monitor import (
 )
 from backend.utils.rate_limiter import check_rate_limit
 from backend.utils.cache import init_redis, cleanup_memory_cache, clear as clear_cache
+from backend.services.rfm_service import RfmDataUnavailableError
 
 logging.basicConfig(
     level=logging.INFO,
@@ -69,6 +70,10 @@ async def lifespan(app: FastAPI):
     yield
 
     cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        pass
     await engine.dispose()
     logger.info("👋 数据库连接池已关闭")
 
@@ -112,7 +117,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-_SKIP_RATE_LIMIT_PATHS = ("/docs", "/redoc", "/health", "/health-panel", "/", "/demo", "/openapi.json", "/monitor")
+_SKIP_RATE_LIMIT_PATHS = (
+    "/docs", "/redoc", "/health", "/health/detailed", "/health-panel", "/",
+    "/demo", "/openapi.json", "/monitor", "/metrics",
+)
 
 
 def _set_security_headers(response) -> None:
@@ -129,7 +137,8 @@ async def logging_and_rate_limit_middleware(
 ):
     start = time.time()
 
-    if request.url.path in _SKIP_RATE_LIMIT_PATHS:
+    # CORS 预检请求不占用限流配额，避免浏览器每次跨域调用都被计数
+    if request.method == "OPTIONS" or request.url.path in _SKIP_RATE_LIMIT_PATHS:
         response = await call_next(request)
         duration = (time.time() - start) * 1000
         _set_security_headers(response)
@@ -175,6 +184,19 @@ async def global_exception_handler(request: Request, exc: Exception):
             "error_code": "INTERNAL_ERROR",
             "message": "服务器内部错误",
             "detail": str(exc) if settings.debug else None,
+        },
+    )
+
+
+@app.exception_handler(RfmDataUnavailableError)
+async def rfm_unavailable_handler(request: Request, exc: RfmDataUnavailableError):
+    """数据库暂无订单数据时返回 503 而非 500，避免错误结果被缓存固化。"""
+    logger.info(f"RFM 数据不可用: {exc}")
+    return JSONResponse(
+        status_code=503,
+        content={
+            "error_code": "RFM_DATA_UNAVAILABLE",
+            "message": str(exc),
         },
     )
 

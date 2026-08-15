@@ -45,3 +45,8 @@ ai-ecommerce-assistant/eval/report.json
 logs/
 test_*.json
 -w
+
+# 工具内部计划文件（不入库）
+.zcode/
+# 含真实凭据的轮换脚本（仅本地执行）
+deploy/sql/rotate_credentials.local.sql

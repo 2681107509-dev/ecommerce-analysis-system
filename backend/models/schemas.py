@@ -121,6 +121,7 @@ class AIQueryResponse(BaseModel):
     result: list[dict[str, Any]] = Field(default_factory=list, description="查询结果")
     answer: str = Field(..., description="AI回答文本")
     visualization: Optional[dict[str, Any]] = Field(None, description="可视化配置")
+    sql_error: Optional[str] = Field(None, description="SQL执行失败时的错误说明；为空表示执行成功或未执行")
 
 
 class ErrorResponse(BaseModel):

@@ -65,7 +65,8 @@ async def get_sales_trend(
         conditions.append(Order.order_date <= end_date)
 
     if granularity == "week":
-        period_expr = func.date_format(Order.order_time, "%Y-W%u").label("period")
+        # %x = ISO 周对应的年份，%v = ISO 周（01-53），配套使用可避免跨年周被拆成两条
+        period_expr = func.date_format(Order.order_time, "%x-W%v").label("period")
     elif granularity == "month":
         period_expr = func.date_format(Order.order_time, "%Y-%m").label("period")
     else:

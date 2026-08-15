@@ -14,10 +14,34 @@ DEFAULT_TTL = 300
 _MEMORY_CACHE_MAX_SIZE = 1000
 
 _memory_cache: dict[str, dict] = {}
-_cache_locks: dict[str, asyncio.Lock] = {}
-
 _redis_client = None
 _redis_available = False
+
+
+class _RefLock:
+    """带持有者计数的防击穿锁。
+
+    仅用 lock.locked() 判断"空闲"是不够的：协程可能已从 _cache_locks 取到锁、
+    但还在 await 队列中等待（此时 locked() 为 False）。若后台清理任务在这时
+    回收锁对象，后续请求会创建一把新锁并同时进入计算，single-flight 失效。
+    因此用 refs 计数覆盖"已取用未释放"的全生命周期。
+    """
+
+    __slots__ = ("lock", "refs")
+
+    def __init__(self) -> None:
+        self.lock = asyncio.Lock()
+        self.refs = 0
+
+
+_cache_locks: dict[str, _RefLock] = {}
+
+
+def _release_lock_if_idle(key: str) -> None:
+    """无人取用（refs==0）且未上锁时才回收锁对象。"""
+    lock = _cache_locks.get(key)
+    if lock is not None and lock.refs == 0 and not lock.lock.locked():
+        _cache_locks.pop(key, None)
 
 
 def init_redis(redis_url: str) -> bool:
@@ -67,6 +91,28 @@ def _to_jsonable(value: Any) -> Any:
     return value
 
 
+def _cache_contains(key: str) -> bool:
+    """判断缓存键是否已存在且未过期。
+
+    get() 返回 None 可能是「未缓存」也可能是「缓存的值为 None」，
+    single-flight 锁内二次检查必须能区分这两种情况，否则
+    缓存值为 None 的函数会反复执行（防击穿失效）。
+    """
+    if _redis_available and _redis_client:
+        try:
+            return _redis_client.get(key) is not None
+        except Exception:
+            return False
+    entry = _memory_cache.get(key)
+    if entry is None:
+        return False
+    if entry["expires_at"] < time.time():
+        del _memory_cache[key]
+        _release_lock_if_idle(key)
+        return False
+    return True
+
+
 def get(key: str) -> Optional[Any]:
     if _redis_available and _redis_client:
         try:
@@ -81,7 +127,7 @@ def get(key: str) -> Optional[Any]:
         return None
     if entry["expires_at"] < time.time():
         del _memory_cache[key]
-        _cache_locks.pop(key, None)
+        _release_lock_if_idle(key)
         return None
     return entry["data"]
 
@@ -98,11 +144,11 @@ def set(key: str, value: Any, ttl: int = DEFAULT_TTL) -> None:
         expired = [k for k, v in _memory_cache.items() if v["expires_at"] < now]
         for k in expired:
             del _memory_cache[k]
-            _cache_locks.pop(k, None)
+            _release_lock_if_idle(k)
         if len(_memory_cache) >= _MEMORY_CACHE_MAX_SIZE:
             oldest_key = next(iter(_memory_cache))
             del _memory_cache[oldest_key]
-            _cache_locks.pop(oldest_key, None)
+            _release_lock_if_idle(oldest_key)
     _memory_cache[key] = {"data": value, "expires_at": time.time() + ttl}
 
 
@@ -184,20 +230,27 @@ def cached(ttl: int = DEFAULT_TTL):
                     if return_adapter
                     else cached_result
                 )
-            if cache_key not in _cache_locks:
-                _cache_locks[cache_key] = asyncio.Lock()
-            async with _cache_locks[cache_key]:
-                cached_result = get(cache_key)
-                if cached_result is not None:
-                    return (
-                        return_adapter.validate_python(cached_result)
-                        if return_adapter
-                        else cached_result
-                    )
-                result = await func(*args, **kwargs)
-                set(cache_key, result, ttl=ttl)
-                logger.debug(f"已缓存: {cache_key} (TTL={ttl}s)")
-                return result
+            key_lock = _cache_locks.get(cache_key)
+            if key_lock is None:
+                key_lock = _cache_locks.setdefault(cache_key, _RefLock())
+            key_lock.refs += 1
+            try:
+                async with key_lock.lock:
+                    # 用存在性判断而非 get() is not None：
+                    # 缓存值本身可能为 None，误判会导致 single-flight 失效
+                    if _cache_contains(cache_key):
+                        cached_result = get(cache_key)
+                        return (
+                            return_adapter.validate_python(cached_result)
+                            if return_adapter
+                            else cached_result
+                        )
+                    result = await func(*args, **kwargs)
+                    set(cache_key, result, ttl=ttl)
+                    logger.debug(f"已缓存: {cache_key} (TTL={ttl}s)")
+                    return result
+            finally:
+                key_lock.refs -= 1
         return wrapper
     return decorator
 
@@ -228,13 +281,13 @@ def cleanup_memory_cache() -> int:
     expired = [k for k, v in _memory_cache.items() if v["expires_at"] < now]
     for k in expired:
         del _memory_cache[k]
-        _cache_locks.pop(k, None)
+        _release_lock_if_idle(k)
 
     # Redis 模式没有本地缓存条目，但每个唯一请求仍会创建一次防击穿锁。
-    # 仅清理未持有的孤立锁，避免高基数请求导致锁字典持续增长。
+    # 仅清理无人取用且未持有的孤立锁，避免高基数请求导致锁字典持续增长。
     orphan_locks = [
         key for key, lock in _cache_locks.items()
-        if key not in _memory_cache and not lock.locked()
+        if key not in _memory_cache and lock.refs == 0 and not lock.lock.locked()
     ]
     for key in orphan_locks:
         _cache_locks.pop(key, None)

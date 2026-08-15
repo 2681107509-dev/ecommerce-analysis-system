@@ -15,6 +15,14 @@ from backend.utils.rfm_scoring import assign_segment, quantile_scores
 
 logger = logging.getLogger(__name__)
 
+
+class RfmDataUnavailableError(RuntimeError):
+    """数据库暂无可用订单数据，RFM 无法计算。
+
+    属于数据未就绪（503 语义）而非服务器 bug；必须以异常抛出，
+    避免错误结果被 @cached / 快照缓存固化 10 分钟。
+    """
+
 VALID_SEGMENTS = [
     "重要价值客户", "重要发展客户", "重要保持客户", "重要挽留客户",
     "一般价值客户", "一般发展客户", "一般保持客户", "一般挽留客户",
@@ -31,13 +39,18 @@ _SNAPSHOT_TTL_SECONDS = 600
 _SNAPSHOT_MAX_ENTRIES = 8
 _snapshot_cache: OrderedDict[tuple[Optional[str], int], dict] = OrderedDict()
 _snapshot_locks: dict[tuple[Optional[str], int], asyncio.Lock] = {}
+# 与 backend/utils/cache.py 同理：锁可能"已取用但还在等待队列中"，
+# 用引用计数保护，防止快照逐出时误回收正在使用的锁
+_snapshot_lock_refs: dict[tuple[Optional[str], int], int] = {}
 
 
 async def _fetch_rfm_raw(db: AsyncSession, ref_date) -> list[dict]:
     rfm_stmt = select(
         Order.user_name,
         func.datediff(literal(ref_date), func.max(Order.order_date)).label("recency_days"),
-        func.count(Order.id).label("frequency"),
+        # F 口径 = 去重订单数：与 BI 看板 nunique('订单号') 保持一致，
+        # 若同一订单号存在多行，count(id) 会把 F 值算高、分群结果前后端不一致
+        func.count(func.distinct(Order.order_no)).label("frequency"),
         func.coalesce(func.sum(Order.payment_amount), 0).label("monetary"),
     ).where(
         and_(
@@ -135,11 +148,11 @@ async def _build_rfm_snapshot(
         result = await db.execute(max_date_stmt)
         ref_date = result.scalar()
         if ref_date is None:
-            return {"error": "数据库中无订单数据", "total_users": 0}
+            raise RfmDataUnavailableError("数据库中无订单数据")
 
     users = await _fetch_rfm_raw(db, ref_date)
     if not users:
-        return {"error": "无有效付款订单数据", "total_users": 0}
+        raise RfmDataUnavailableError("无有效付款订单数据")
 
     users = _score_users(users, n_bins)
     segments = _build_segments(users)
@@ -189,40 +202,51 @@ async def _get_rfm_snapshot(
         return cached_snapshot["data"]
 
     lock = _snapshot_locks.setdefault(key, asyncio.Lock())
-    async with lock:
-        now = time.monotonic()
-        cached_snapshot = _snapshot_cache.get(key)
-        if cached_snapshot and cached_snapshot["expires_at"] > now:
+    _snapshot_lock_refs[key] = _snapshot_lock_refs.get(key, 0) + 1
+    try:
+        async with lock:
+            now = time.monotonic()
+            cached_snapshot = _snapshot_cache.get(key)
+            if cached_snapshot and cached_snapshot["expires_at"] > now:
+                _snapshot_cache.move_to_end(key)
+                return cached_snapshot["data"]
+
+            snapshot = await _build_rfm_snapshot(
+                db,
+                reference_date=reference_date,
+                n_bins=n_bins,
+            )
+            _snapshot_cache[key] = {
+                "data": snapshot,
+                "expires_at": now + _SNAPSHOT_TTL_SECONDS,
+            }
             _snapshot_cache.move_to_end(key)
-            return cached_snapshot["data"]
 
-        snapshot = await _build_rfm_snapshot(
-            db,
-            reference_date=reference_date,
-            n_bins=n_bins,
-        )
-        _snapshot_cache[key] = {
-            "data": snapshot,
-            "expires_at": now + _SNAPSHOT_TTL_SECONDS,
-        }
-        _snapshot_cache.move_to_end(key)
-
-        while len(_snapshot_cache) > _SNAPSHOT_MAX_ENTRIES:
-            expired_key, _ = _snapshot_cache.popitem(last=False)
-            _snapshot_locks.pop(expired_key, None)
-        return snapshot
+            while len(_snapshot_cache) > _SNAPSHOT_MAX_ENTRIES:
+                _snapshot_cache.popitem(last=False)
+            # 只回收无人取用且未持有的锁，防止高基数 reference_date 场景锁字典泄漏
+            for stale_key in [
+                k for k, lk in _snapshot_locks.items()
+                if k not in _snapshot_cache
+                and _snapshot_lock_refs.get(k, 0) == 0
+                and not lk.locked()
+            ]:
+                _snapshot_locks.pop(stale_key, None)
+                _snapshot_lock_refs.pop(stale_key, None)
+            return snapshot
+    finally:
+        _snapshot_lock_refs[key] = _snapshot_lock_refs.get(key, 1) - 1
 
 
 def clear_rfm_snapshot_cache() -> None:
     """清空 RFM 进程内快照；数据源变更后调用。"""
     _snapshot_cache.clear()
     _snapshot_locks.clear()
+    _snapshot_lock_refs.clear()
 
 
 def _summary_from_snapshot(snapshot: dict) -> dict:
     """提取适合 Redis 缓存和 API 返回的小型汇总对象。"""
-    if "error" in snapshot:
-        return snapshot
     return {
         "reference_date": snapshot["reference_date"],
         "total_users": snapshot["total_users"],
@@ -262,12 +286,7 @@ async def get_rfm_segment_detail(
         reference_date=reference_date,
         n_bins=n_bins,
     )
-    if "error" in snapshot:
-        return snapshot
-
     users = snapshot.get("users", [])
-    if not users:
-        return {"error": "无有效付款订单数据", "total_users": 0}
 
     filtered = [u for u in users if u["segment"] == segment]
 
@@ -299,8 +318,6 @@ async def get_rfm_top_users(
         reference_date=reference_date,
         n_bins=n_bins,
     )
-    if "error" in snapshot:
-        return snapshot
     return {
         "reference_date": snapshot["reference_date"],
         "total_users": snapshot["total_users"],
@@ -311,8 +328,6 @@ async def get_rfm_top_users(
 @cached(ttl=600)
 async def get_rfm_overview(db: AsyncSession) -> dict:
     rfm_data = await compute_rfm(db)
-    if "error" in rfm_data:
-        return rfm_data
 
     segments = rfm_data["segments"]
     segment_distribution = [{"segment": s["segment"], "count": s["count"], "percentage": s["percentage"]} for s in segments]

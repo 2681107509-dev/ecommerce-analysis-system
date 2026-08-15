@@ -26,20 +26,31 @@ _ORDER_EXPORT_HEADERS = [
 ]
 
 
+def _sanitize_cell(value):
+    """防 CSV/Excel 公式注入：以 = + - @ 或控制符开头的单元格加 ' 前缀。
+
+    数据库中的 user_name / platform_type 等字符串字段可能被注入恶意公式，
+    用户打开导出文件时会被 Excel/WPS 当作公式执行（如 DDE 外链）。
+    """
+    if isinstance(value, str) and value[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return f"'{value}"
+    return value
+
+
 def _order_export_row(order: Order) -> list:
     """将 ORM 订单转换为导出列，CSV 与 Excel 共用同一字段顺序。"""
     return [
-        order.id,
-        order.order_no,
-        order.user_name,
-        order.product_id,
-        order.order_amount,
-        order.payment_amount,
-        order.platform_type,
-        str(order.order_time),
-        str(order.payment_time) if order.payment_time else "",
-        order.is_refunded,
-        order.discount_amount,
+        _sanitize_cell(order.id),
+        _sanitize_cell(order.order_no),
+        _sanitize_cell(order.user_name),
+        _sanitize_cell(order.product_id),
+        _sanitize_cell(order.order_amount),
+        _sanitize_cell(order.payment_amount),
+        _sanitize_cell(order.platform_type),
+        _sanitize_cell(str(order.order_time)),
+        _sanitize_cell(str(order.payment_time) if order.payment_time else ""),
+        _sanitize_cell(order.is_refunded),
+        _sanitize_cell(order.discount_amount),
     ]
 
 
@@ -54,7 +65,9 @@ async def _iter_order_chunks(
         stmt = (
             select(Order)
             .where(*conditions)
-            .order_by(Order.order_time.desc())
+            # order_time 并列值极多，MySQL 对并列行排序不稳定，
+            # 必须补 id 作次级排序键，否则 OFFSET 分页会重复/丢行
+            .order_by(Order.order_time.desc(), Order.id.desc())
             .offset(offset)
             .limit(_EXPORT_CHUNK_SIZE)
         )

@@ -43,7 +43,8 @@ BUSINESS_CONTEXT = """## 数据时间范围
 1. 始终先查看表结构确认列名，再编写 SQL
 2. 日期筛选使用 order_date 列，格式 'YYYY-MM-DD'
 3. 金额查询使用 payment_amount
-4. 退款相关使用 is_refund = '是'
+4. 退款相关使用 is_refund = '是'（注意：is_refund 是物理列名，
+   ORM 属性名是 is_refunded，本提示词面向原生 SQL，必须用物理列名 is_refund）
 5. SQL 结果较大时使用 LIMIT 限制
 6. 先给出数据结论，再附上 SQL 语句
 7. 用中文回答
@@ -149,7 +150,7 @@ def _execute_query_with_columns(sql: str) -> list[dict]:
     不再从 SELECT 文本中按逗号猜测列名；CASE、ROUND 等复杂表达式内部
     也包含逗号，字符串切分会导致列名与结果错位。
     """
-    if not _is_read_only_sql(sql):
+    if not is_read_only_sql(sql):
         raise ValueError("仅允许执行只读 SQL")
 
     db = _get_sync_db()
@@ -161,17 +162,12 @@ def _execute_query_with_columns(sql: str) -> list[dict]:
     ]
 
 
-_is_read_only_sql = is_read_only_sql
-
-
 @lru_cache(maxsize=1)
 def _get_sync_db() -> SQLDatabase:
-    db_url = (
-        f"mysql+pymysql://{settings.db_user}:{settings.db_password}"
-        f"@{settings.db_host}:{settings.db_port}/{settings.db_name}?charset=utf8mb4"
-    )
+    # 优先使用只读账户（部署环境为 ea_ai）：即使只读黑名单被绕过也无法写库。
+    # 连接串组件统一走 quote_plus，密码含 @:/ 等字符时不会被污染。
     db = SQLDatabase.from_uri(
-        db_url,
+        settings.ai_database_url,
         engine_args={
             "pool_pre_ping": True,
             "pool_size": 3,
@@ -184,6 +180,8 @@ def _get_sync_db() -> SQLDatabase:
 
 
 _agent_cache: dict = {"agent": None, "settings_hash": None}
+# agent 构建涉及网络 I/O（数据库引擎、LLM 客户端），并发首问需加锁防止重复构建
+_agent_build_lock = asyncio.Lock()
 
 
 def _get_settings_hash() -> str:
@@ -192,14 +190,7 @@ def _get_settings_hash() -> str:
     ).hexdigest()
 
 
-def _get_agent():
-    if not settings.llm_api_key:
-        return None
-
-    current_hash = _get_settings_hash()
-    if _agent_cache["agent"] is not None and _agent_cache["settings_hash"] == current_hash:
-        return _agent_cache["agent"]
-
+def _build_agent():
     db = _get_sync_db()
     llm = ChatOpenAI(
         api_key=settings.llm_api_key,
@@ -243,9 +234,25 @@ Final Answer: 根据查询结果...
         handle_parsing_errors=True,
         agent_executor_kwargs={"return_intermediate_steps": True},
     )
-    _agent_cache["agent"] = agent
-    _agent_cache["settings_hash"] = current_hash
     return agent
+
+
+async def _get_agent():
+    if not settings.llm_api_key:
+        return None
+
+    current_hash = _get_settings_hash()
+    if _agent_cache["agent"] is not None and _agent_cache["settings_hash"] == current_hash:
+        return _agent_cache["agent"]
+
+    async with _agent_build_lock:
+        # double-check：等锁期间可能已被其他并发请求构建完成
+        if _agent_cache["agent"] is not None and _agent_cache["settings_hash"] == current_hash:
+            return _agent_cache["agent"]
+        agent = await asyncio.to_thread(_build_agent)
+        _agent_cache["agent"] = agent
+        _agent_cache["settings_hash"] = current_hash
+        return agent
 
 
 async def process_natural_language_query(query: str) -> AIQueryResponse:
@@ -267,7 +274,7 @@ async def process_natural_language_query(query: str) -> AIQueryResponse:
         )
 
     try:
-        agent = _get_agent()
+        agent = await _get_agent()
         if agent is None:
             return AIQueryResponse(
                 sql=None,
@@ -302,9 +309,10 @@ async def process_natural_language_query(query: str) -> AIQueryResponse:
 
             result_data = []
             visualization = None
+            sql_error = None
             if extracted_sql:
                 try:
-                    if _is_read_only_sql(extracted_sql):
+                    if is_read_only_sql(extracted_sql):
                         result_data = await asyncio.to_thread(
                             _execute_query_with_columns,
                             extracted_sql,
@@ -315,7 +323,9 @@ async def process_natural_language_query(query: str) -> AIQueryResponse:
                             rows = [list(item.values()) for item in result_data]
                             visualization = _build_visualization(columns, rows)
                 except Exception as e:
+                    # 记录并上抛执行错误，避免"SQL 挂了"被误判为"无数据"
                     logger.warning(f"解析错误后SQL执行失败: {e}")
+                    sql_error = f"SQL 执行失败: {e}"
 
             if not result_data:
                 steps = response.get("intermediate_steps", [])
@@ -344,16 +354,18 @@ async def process_natural_language_query(query: str) -> AIQueryResponse:
                 result=result_data,
                 answer=clean_answer,
                 visualization=visualization,
+                sql_error=sql_error,
             )
 
         extracted_sql = _extract_sql_from_intermediate(response)
 
         result_data = []
         visualization = None
+        sql_error = None
 
         if extracted_sql:
             try:
-                if not _is_read_only_sql(extracted_sql):
+                if not is_read_only_sql(extracted_sql):
                     logger.warning(f"拦截危险SQL: {extracted_sql[:100]}")
                     return AIQueryResponse(
                         sql=None,
@@ -371,13 +383,16 @@ async def process_natural_language_query(query: str) -> AIQueryResponse:
                     rows = [list(item.values()) for item in result_data]
                     visualization = _build_visualization(columns, rows)
             except Exception as e:
+                # 记录并上抛执行错误，避免"SQL 挂了"被误判为"无数据"
                 logger.warning(f"SQL执行失败: {e}")
+                sql_error = f"SQL 执行失败: {e}"
 
         return AIQueryResponse(
             sql=extracted_sql,
             result=result_data,
             answer=answer,
             visualization=visualization,
+            sql_error=sql_error,
         )
 
     except Exception as e:

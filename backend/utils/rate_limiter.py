@@ -69,9 +69,11 @@ def _get_client_id(request: Request, trust_proxy_headers: bool = False) -> str:
             return real_ip.strip()
         forwarded = request.headers.get("x-forwarded-for")
         if forwarded:
+            # 取最右侧一跳：链路为 "客户端伪造值, ..., 可信代理追加的真实IP"，
+            # 第一个 IP 完全由客户端可控，用它做限流键可被任意绕过。
             ips = [ip.strip() for ip in forwarded.split(",")]
             if ips:
-                return ips[0]
+                return ips[-1]
     return request.client.host if request.client else "unknown"
 
 

@@ -94,6 +94,8 @@ services:
       SYNC_ORDERS_ON_STARTUP: "true"
       RAG_STATS_PATH: /app/ai-ecommerce-assistant/data/rag_stats.json
       DEBUG: ${DEBUG:-false}
+      AI_DB_USER: ${AI_DB_USER:-ea_ai}
+      AI_DB_PASSWORD: ${AI_DB_PASSWORD:-${DB_AI_PASSWORD:-${DB_PASSWORD:?请设置 DB_AI_PASSWORD}}}
     volumes:
       - chroma_data:/app/ai-ecommerce-assistant/data:ro
     expose:

@@ -26,8 +26,6 @@ async def rfm_overview(
     user: dict = Depends(get_current_user),
 ):
     result = await get_rfm_overview(db)
-    if "error" in result:
-        raise HTTPException(status_code=500, detail=result["error"])
     return result
 
 
@@ -43,8 +41,6 @@ async def rfm_segments(
         reference_date=reference_date.isoformat() if reference_date else None,
         n_bins=n_bins,
     )
-    if "error" in result:
-        raise HTTPException(status_code=500, detail=result["error"])
     return {
         "reference_date": result["reference_date"],
         "total_users": result["total_users"],
@@ -60,6 +56,8 @@ async def rfm_segment_users(
     segment: str,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    reference_date: Optional[date] = Query(None, description="参考日期(YYYY-MM-DD)，默认为最新订单日期"),
+    n_bins: int = Query(5, ge=3, le=10, description="分位数分组数"),
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
@@ -69,19 +67,25 @@ async def rfm_segment_users(
             detail=f"无效分群名称: {segment}，可选值: {VALID_SEGMENTS}",
         )
 
-    result = await get_rfm_segment_detail(db, segment=segment, page=page, page_size=page_size)
-    if "error" in result:
-        raise HTTPException(status_code=500, detail=result["error"])
+    result = await get_rfm_segment_detail(
+        db, segment=segment, page=page, page_size=page_size,
+        reference_date=reference_date.isoformat() if reference_date else None,
+        n_bins=n_bins,
+    )
     return result
 
 
 @router.get("/top-users", summary="RFM TOP 用户")
 async def rfm_top_users(
     limit: int = Query(20, ge=1, le=100, description="返回数量"),
+    reference_date: Optional[date] = Query(None, description="参考日期(YYYY-MM-DD)，默认为最新订单日期"),
+    n_bins: int = Query(5, ge=3, le=10, description="分位数分组数"),
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    result = await get_rfm_top_users(db, limit=limit)
-    if "error" in result:
-        raise HTTPException(status_code=500, detail=result["error"])
+    result = await get_rfm_top_users(
+        db, limit=limit,
+        reference_date=reference_date.isoformat() if reference_date else None,
+        n_bins=n_bins,
+    )
     return result

@@ -26,7 +26,7 @@ from sqlalchemy.engine import Engine
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
-from backend.utils.text_cleaner import clean_sql  # noqa: E402
+from backend.utils.text_cleaner import clean_sql, sanitize_error  # noqa: E402
 from backend.utils.sql_guard import (  # noqa: E402
     ensure_read_only_sql,
     guard_read_only_engine,
@@ -226,7 +226,8 @@ def init_db():
         guard_read_only_engine(database._engine)
         return database
     except Exception as e:
-        st.error(f"❌ 数据库连接失败：{e}")
+        logger.error("数据库连接失败: %s", e, exc_info=True)
+        st.error(f"❌ 数据库连接失败：{sanitize_error(e)}")
         return None
 
 
@@ -240,7 +241,8 @@ def init_engine() -> Engine | None:
         guard_read_only_engine(engine)
         return engine
     except Exception as e:
-        st.warning(f"⚠️ SQLAlchemy engine 初始化失败：{e}")
+        logger.warning("SQLAlchemy engine 初始化失败: %s", e, exc_info=True)
+        st.warning(f"⚠️ SQLAlchemy engine 初始化失败：{sanitize_error(e)}")
         return None
 
 
@@ -900,7 +902,8 @@ def run_sql_query(sql: str) -> pd.DataFrame | None:
                 ]
                 return pd.DataFrame(converted, columns=cols)
             except Exception as e:
-                st.warning(f"⚠️ 引擎直连执行失败，回退到 langchain：{e}")
+                logger.warning("引擎直连执行失败: %s", e, exc_info=True)
+                st.warning(f"⚠️ 引擎直连执行失败，回退到 langchain：{sanitize_error(e)}")
 
         # 路径 1：langchain SQLDatabase.run(fetch="cursor")
         db = init_db()

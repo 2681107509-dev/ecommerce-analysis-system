@@ -1,3 +1,4 @@
+import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -9,6 +10,8 @@ from pydantic import BaseModel
 from backend.config import get_settings
 
 settings = get_settings()
+
+logger = logging.getLogger(__name__)
 
 ALGORITHM = settings.jwt_algorithm
 ACCESS_TOKEN_EXPIRE_MINUTES = settings.jwt_expire_minutes
@@ -76,7 +79,26 @@ def authenticate_user(username: str, password: str) -> bool:
         return False
     if stored_password.startswith(("$2a$", "$2b$", "$2y$")):
         return verify_password(password, stored_password)
-    return secrets.compare_digest(password, stored_password)
+    # 明文密码仅在 DEBUG 开发模式兼容；生产环境 .env 必须存 bcrypt 哈希，
+    # 否则该账号直接拒绝登录（防止配置失误把明文凭据带上生产）。
+    if settings.debug:
+        logger.warning(
+            "用户 %s 的密码以明文配置（仅开发模式兼容），建议改为 bcrypt 哈希", username,
+        )
+        return secrets.compare_digest(password, stored_password)
+    logger.error("用户 %s 的密码未按 bcrypt 哈希配置，生产环境拒绝登录", username)
+    return False
+
+
+if __name__ == "__main__":
+    # 生成 bcrypt 哈希的命令行工具，输出可写入 .env 的 ADMIN_PASSWORD / ANALYST_PASSWORD：
+    #   python -m backend.utils.auth "你的明文密码"
+    import sys
+
+    if len(sys.argv) != 2:
+        print("用法: python -m backend.utils.auth <明文密码>")
+        raise SystemExit(1)
+    print(_hash_password(sys.argv[1]))
 
 
 def generate_api_key() -> str:
