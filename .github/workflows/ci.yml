@@ -159,8 +159,10 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: 安装 Ruff（版本与 backend/requirements-dev.txt 锁定一致，避免新版本默认规则集变动导致误报）
-        run: python -m pip install ruff==0.15.17
+      - name: 安装 Ruff（从 backend/requirements-dev.txt 读取锁定的版本，避免与开发环境漂移）
+        run: |
+          python -m pip install -r backend/requirements-dev.txt
+          ruff --version
 
       - name: 静态检查
         run: ruff check backend ai-ecommerce-assistant streamlit_app.py scripts
