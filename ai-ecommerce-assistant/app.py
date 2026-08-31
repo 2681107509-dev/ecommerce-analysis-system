@@ -1,4 +1,5 @@
 import ast
+import asyncio
 import datetime
 import decimal
 import hashlib
@@ -11,15 +12,14 @@ import sys
 import time
 from pathlib import Path
 from urllib.parse import quote_plus
+from uuid import uuid4
 
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 from dotenv import load_dotenv
-from langchain_community.agent_toolkits import SQLDatabaseToolkit, create_sql_agent
 from langchain_community.utilities.sql_database import SQLDatabase
-from langchain_openai import ChatOpenAI
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
@@ -28,9 +28,12 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 # 业务知识来源抽取（无 streamlit 依赖，便于单元测试）
-from rag import extract_rag_sources
 from rag import metrics as rag_metrics
 
+from agent_core import AgentRuntime
+from agent_core.model_adapter import OpenAIModelAdapter
+from agent_core.models import AgentSource
+from agent_core.session import MemoryConversationStore
 from backend.utils.sql_guard import (
     ensure_read_only_sql,
     guard_read_only_engine,
@@ -229,6 +232,8 @@ if "model_base_url" not in st.session_state:
     st.session_state.model_base_url = BASE_URL
 if "model_name" not in st.session_state:
     st.session_state.model_name = MODEL_NAME
+if "thread_id" not in st.session_state:
+    st.session_state.thread_id = str(uuid4())
 
 
 def get_db_uri():
@@ -295,59 +300,8 @@ def init_retriever():
         }
 
 
-def init_agent(_db, _retriever, api_key: str, base_url: str, model_name: str):
-    llm = ChatOpenAI(
-        api_key=api_key,
-        base_url=base_url,
-        model=model_name,
-        temperature=0.1,
-    )
-    toolkit = SQLDatabaseToolkit(db=_db, llm=llm)
-
-    # 默认 prefix（向后兼容，无 RAG 时使用）
-    default_prefix = f"""你是一个专业的 AI 智能商业分析助手。你可以访问一个名为 `orders` 的电商订单数据库表。
-
-{BUSINESS_CONTEXT}
-
-当用户提问时，你需要：
-1. 理解用户意图
-2. 生成正确的 SQL 查询
-3. 执行查询获取数据
-4. 用中文总结结论
-5. 如果发现异常指标，给出业务建议
-
-请始终用中文回答。"""
-
-    # 尝试用 RAG 增强版 prefix + 业务知识工具
-    try:
-        from rag import build_augmented_prefix
-        from rag.tools import build_knowledge_tool
-
-        extra_tools = []
-        if _retriever is not None:
-            extra_tools.append(build_knowledge_tool(_retriever))
-            prefix = build_augmented_prefix(BUSINESS_CONTEXT)
-        else:
-            prefix = default_prefix
-    except Exception as e:
-        logger.error("RAG 增强初始化失败，使用默认 prefix: %s", e)
-        prefix = default_prefix
-        extra_tools = []
-
-    return create_sql_agent(
-        llm=llm,
-        toolkit=toolkit,
-        prefix=prefix,
-        extra_tools=extra_tools,
-        verbose=True,
-        agent_type="zero-shot-react-description",
-        handle_parsing_errors=True,
-        agent_executor_kwargs={"return_intermediate_steps": True},
-    )
-
-
-def get_session_agent(_db, _retriever):
-    """按当前 Streamlit 会话缓存 Agent，不把用户 API Key 写入全局缓存。"""
+def get_session_runtime(_db, _retriever):
+    """按当前 Streamlit 会话创建共享 Runtime；API Key 不进入全局缓存。"""
     api_key = st.session_state.get("model_api_key", "").strip()
     if _db is None or not api_key:
         return None
@@ -355,16 +309,51 @@ def get_session_agent(_db, _retriever):
     base_url = st.session_state.get("model_base_url", BASE_URL).strip()
     model_name = st.session_state.get("model_name", MODEL_NAME).strip()
     fingerprint = hashlib.sha256(f"{api_key}:{base_url}:{model_name}".encode()).hexdigest()
-    if st.session_state.get("agent_fingerprint") != fingerprint:
-        st.session_state.agent_instance = init_agent(
-            _db,
-            _retriever,
-            api_key=api_key,
-            base_url=base_url,
-            model_name=model_name,
-        )
-        st.session_state.agent_fingerprint = fingerprint
-    return st.session_state.get("agent_instance")
+    if st.session_state.get("runtime_fingerprint") == fingerprint:
+        return st.session_state.get("runtime_instance")
+
+    model_adapter = OpenAIModelAdapter(
+        api_key=api_key,
+        base_url=base_url,
+        model=model_name,
+        business_context=BUSINESS_CONTEXT,
+    )
+
+    async def retrieve_knowledge(query: str) -> list[AgentSource]:
+        if _retriever is None:
+            return []
+        docs = await asyncio.to_thread(_retriever.retrieve, query, k=3)
+        return [
+            AgentSource(
+                filename=Path(item.get("metadata", {}).get("source", "unknown")).name,
+                section=item.get("metadata", {}).get("section", ""),
+                doc_type=item.get("metadata", {}).get("doc_type", "markdown"),
+                score=float(item.get("score", 0)),
+                snippet=re.sub(r"\\s+", " ", item.get("content", ""))[:240],
+            )
+            for item in docs
+        ]
+
+    async def load_schema() -> str:
+        return await asyncio.to_thread(_db.get_table_info, ["orders"])
+
+    async def execute_sql(sql: str) -> list[dict]:
+        frame = await asyncio.to_thread(run_sql_query, sql)
+        return [] if frame is None else frame.to_dict(orient="records")
+
+    runtime = AgentRuntime(
+        retriever=retrieve_knowledge,
+        schema_loader=load_schema,
+        sql_generator=model_adapter.generate_sql,
+        sql_executor=execute_sql,
+        answer_generator=model_adapter.answer,
+        conversations=MemoryConversationStore(ttl_seconds=1800, max_sessions=1, max_turns=6),
+        sql_timeout_seconds=10,
+    )
+    st.session_state.runtime_instance = runtime
+    st.session_state.runtime_fingerprint = fingerprint
+    return runtime
+
 
 
 def detect_chart_type(df: pd.DataFrame, question: str = "") -> str:
@@ -572,77 +561,6 @@ def create_chart(df: pd.DataFrame, title: str = "", question: str = "") -> go.Fi
     )
 
     return fig
-
-
-def extract_sql_from_intermediate(response: dict) -> str | None:
-    steps = response.get("intermediate_steps", [])
-    
-    for step in steps:
-        if isinstance(step, tuple) and len(step) >= 2:
-            action, observation = step
-            
-            if hasattr(action, "tool_input"):
-                tool_input = action.tool_input
-                if isinstance(tool_input, dict):
-                    sql = tool_input.get("sql") or tool_input.get("query")
-                    if sql and isinstance(sql, str) and "SELECT" in sql.upper():
-                        return clean_sql_local(sql)
-                elif isinstance(tool_input, str) and "SELECT" in tool_input.upper():
-                    return clean_sql_local(tool_input)
-
-            if isinstance(observation, str):
-                # 观测文本可能含 HTML 高亮标签，先剥再抽
-                clean_obs = re.sub(r'<[^>]+>', '', observation)
-                sql_match = re.search(r'SELECT\s+[\s\S]+?(?:;|$)', clean_obs, re.IGNORECASE)
-                if sql_match:
-                    return clean_sql_local(sql_match.group(0))
-
-    output = response.get("output", "")
-    if isinstance(output, str):
-        patterns = [
-            r'```sql\s*(.*?)```',
-            r'```(SELECT[\s\S]*?)```',
-            r'SELECT\s+[\s\S]+?FROM\s+[\s\S]+?(?:;|```|$)',
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, output, re.IGNORECASE | re.DOTALL)
-            if match:
-                return clean_sql_local(match.group(1))
-
-    return None
-
-
-# 业务知识来源抽取：从 RAG 工具的 sentinel observation 还原元数据列表。
-# 函数实现见 rag.extractor，单独成模块以便无 streamlit 依赖的单元测试。
-def extract_sql_from_answer(answer: str) -> str | None:
-    if not answer or not isinstance(answer, str):
-        return None
-
-    # 保护 markdown 代码块：避免后续 HTML 标签清理破坏 ``` 标记
-    codeblocks: dict[str, str] = {}
-    def _stash(m):
-        key = f"\x00SQLCB{len(codeblocks)}ENDSQLCB\x00"
-        codeblocks[key] = m.group(0)
-        return key
-    stripped = re.sub(r'```[\s\S]*?```', _stash, answer)
-    # 剥离非代码块中的 HTML 高亮标签（LLM 可能把上一轮带高亮的 SQL 又回显了）
-    stripped = re.sub(r'<[^>]+>', '', stripped)
-
-    # 还原代码块
-    for k, v in codeblocks.items():
-        stripped = stripped.replace(k, v)
-
-    patterns = [
-        r'```sql\s*(.*?)```',
-        r'```(SELECT[\s\S]*?)```',
-        r'(SELECT\s+[\s\S]*?;)',
-        r'SELECT\s+[\w\s,\(\)\*]+\s+FROM\s+\w+[\s\S]*?(?:;|```|$)',
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, stripped, re.IGNORECASE | re.DOTALL)
-        if match:
-            return clean_sql_local(match.group(1))
-    return None
 
 
 def parse_data_from_answer(answer: str) -> pd.DataFrame | None:
@@ -1104,13 +1022,25 @@ def render_answer_with_highlights(answer: str):
     st.markdown(answer, unsafe_allow_html=True)
 
 
+def render_agent_steps(steps: list[dict]) -> None:
+    if not steps:
+        return
+    with st.expander(f"🧭 执行轨迹 ({len(steps)} 步)", expanded=False):
+        for step in steps:
+            icon = "✅" if step.get("status") == "success" else "⚠️"
+            st.caption(
+                f"{icon} {step.get('name', 'step')} · {step.get('duration_ms', 0)}ms — "
+                f"{step.get('summary', '')}"
+            )
+
+
 db = init_db()
 try:
     retriever, rag_status = init_retriever()
 except Exception as e:
     logger.error("RAG 初始化异常: %s", e)
     retriever, rag_status = None, {"ok": False, "error": str(e), "count": 0}
-agent = get_session_agent(db, retriever)
+runtime = get_session_runtime(db, retriever)
 
 with st.sidebar:
     with st.expander("⚙️ 模型连接", expanded=not bool(st.session_state.model_api_key)):
@@ -1137,23 +1067,20 @@ with st.sidebar:
                 st.session_state.model_base_url = model_base_url.strip()
                 st.session_state.model_name = model_name.strip()
                 st.session_state.model_api_key = model_api_key.strip()
-                st.session_state.pop("agent_instance", None)
-                st.session_state.pop("agent_fingerprint", None)
+                st.session_state.pop("runtime_instance", None)
+                st.session_state.pop("runtime_fingerprint", None)
             if test_connection:
                 if not model_api_key.strip():
                     st.warning("请先填写 API Key")
                 else:
                     try:
-                        probe = ChatOpenAI(
+                        probe = OpenAIModelAdapter(
                             api_key=model_api_key.strip(),
                             base_url=model_base_url.strip(),
                             model=model_name.strip(),
-                            temperature=0,
-                            timeout=15,
-                            max_retries=0,
-                            max_tokens=1,
+                            business_context=BUSINESS_CONTEXT,
                         )
-                        probe.invoke("仅回复 OK")
+                        probe.test_connection()
                         st.success("连接成功，模型已响应")
                     except Exception as exc:
                         st.error(f"连接失败：{sanitize_error(exc)}")
@@ -1319,6 +1246,7 @@ for msg_idx, msg in enumerate(st.session_state.messages):
                         f"`相关度 {src['score']:.2f}`"
                     )
                     st.caption(src["preview"])
+        render_agent_steps(msg.get("agent_steps") or [])
 
         if msg.get("csv_data"):
             try:
@@ -1355,7 +1283,7 @@ if hasattr(st.session_state, "pending_question"):
     del st.session_state.pending_question
 
 if prompt:
-    if not agent:
+    if not runtime:
         st.error("请先在侧栏配置模型 API Key，并检查数据库连接。")
         st.stop()
 
@@ -1415,6 +1343,7 @@ if prompt:
                     pass
             if cached.get("sql"):
                 render_sql_block(cached["sql"], cached.get("query_time"))
+            render_agent_steps(cached.get("agent_steps") or [])
         st.session_state.messages.append({
             "role": "assistant",
             "content": cached["answer"],
@@ -1425,6 +1354,7 @@ if prompt:
             "query_time": cached.get("query_time"),
             "question": prompt,
             "rag_sources": cached.get("rag_sources") or [],
+            "agent_steps": cached.get("agent_steps") or [],
         })
         st.stop()
 
@@ -1442,34 +1372,47 @@ if prompt:
         step_placeholder.markdown(show_step_progress(2), unsafe_allow_html=True)
 
         try:
-            start_time = time.time()
-            response = agent.invoke({"input": prompt})
-            query_time = time.time() - start_time
-            answer = response.get("output", "抱歉，我暂时无法回答这个问题。")
-        except Exception as e:
-            error_str = str(e)
-            if "Could not parse LLM output:" in error_str or "output parsing error" in error_str.lower():
-                match = re.search(r'Could not parse LLM output:\s*`(.*)`', error_str, re.DOTALL)
-                if match:
-                    answer = match.group(1)
-                else:
-                    answer = re.sub(r'.*This is the error:.*?`', '', error_str, flags=re.DOTALL).strip()
-                query_time = time.time() - start_time
-                response = {"output": answer, "intermediate_steps": []}
-            else:
-                step_placeholder.empty()
-                st.error(f"⚠️ 执行出错：{error_str}")
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": "执行失败，请检查数据表结构或重试。",
-                    "chart_data": None, "chart_title": "", "csv_data": None,
-                    "sql": None, "query_time": None,
-                    "rag_sources": [],
-                })
-                st.stop()
+            state = asyncio.run(
+                runtime.invoke(
+                    prompt,
+                    owner="streamlit-session",
+                    thread_id=st.session_state.thread_id,
+                )
+            )
+            agent_result = state["result"]
+            answer = agent_result.answer
+            query_time = agent_result.usage.latency_ms / 1000 if agent_result.usage else None
+            rag_sources = [
+                {
+                    "rank": index,
+                    "filename": source.filename,
+                    "section": source.section,
+                    "doc_type": source.doc_type,
+                    "score": source.score,
+                    "preview": source.snippet,
+                }
+                for index, source in enumerate(agent_result.sources, 1)
+            ]
+            agent_steps = [
+                {
+                    "name": step.name,
+                    "status": step.status,
+                    "duration_ms": step.duration_ms,
+                    "summary": step.summary,
+                }
+                for step in agent_result.steps
+            ]
+        except Exception as exc:
+            step_placeholder.empty()
+            st.error(f"⚠️ 执行出错：{sanitize_error(exc)}")
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": "执行失败，请检查模型或数据库连接后重试。",
+                "chart_data": None, "chart_title": "", "csv_data": None,
+                "sql": None, "query_time": None, "rag_sources": [],
+            })
+            st.stop()
 
-        # 抽取本次回答引用的业务知识来源，供"📚 参考知识"面板展示
-        rag_sources = extract_rag_sources(response)
 
         step_placeholder.markdown(show_step_progress(3), unsafe_allow_html=True)
         time.sleep(0.2)
@@ -1480,42 +1423,13 @@ if prompt:
         chart_data = None
         chart_title = prompt[:30]
         csv_data = None
-        extracted_sql = None
-
-        extracted_sql = extract_sql_from_intermediate(response)
-        if not extracted_sql:
-            extracted_sql = extract_sql_from_answer(answer)
+        extracted_sql = agent_result.sql
 
         render_answer_with_highlights(answer)
+        render_agent_steps(agent_steps)
+        result_df = pd.DataFrame(agent_result.rows)
 
-        result_df = None
 
-        if extracted_sql:
-            result_df = run_sql_query(extracted_sql)
-            
-            time_keywords = ['时间段', '小时', 'hour', '天', '日期', '趋势', '分布', '变化', '每天', '每日', '24']
-            is_time_question = any(k in prompt.lower() or k in prompt for k in time_keywords)
-            has_limit = re.search(r'\bLIMIT\s+\d+', extracted_sql, re.IGNORECASE)
-            too_few_rows = result_df is not None and len(result_df) <= 2
-            
-            if is_time_question and too_few_rows and has_limit:
-                cols = result_df.columns.tolist()
-                time_col = cols[0] if cols else 'order_hour'
-                
-                base_sql = re.sub(r'\bLIMIT\s+\d+', '', extracted_sql, flags=re.IGNORECASE)
-                base_sql = re.sub(r'\bORDER\s+BY\s+[\w.,`\(\)\*\s]+DESC\b', '', base_sql, flags=re.IGNORECASE)
-                
-                if 'GROUP BY' in base_sql.upper():
-                    full_sql = f"{base_sql.strip().rstrip(';')} ORDER BY {time_col} ASC"
-                else:
-                    full_sql = extracted_sql
-                
-                if full_sql != extracted_sql:
-                    full_df = run_sql_query(full_sql)
-                    if full_df is not None and len(full_df) > len(result_df):
-                        result_df = full_df
-                        extracted_sql = full_sql
-        
         if result_df is None or (isinstance(result_df, pd.DataFrame) and len(result_df) == 0):
             result_df = parse_data_from_answer(answer)
             if result_df is not None and len(result_df) > 0:
@@ -1574,6 +1488,7 @@ if prompt:
             "query_time": query_time,
             "question": prompt,
             "rag_sources": rag_sources,
+            "agent_steps": agent_steps,
         }
         st.session_state.messages.append(msg_data)
 
@@ -1585,6 +1500,7 @@ if prompt:
             "sql": extracted_sql,
             "query_time": query_time,
             "rag_sources": rag_sources,
+            "agent_steps": agent_steps,
         }
 
         st.session_state.query_history.append({

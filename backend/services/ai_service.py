@@ -1,5 +1,4 @@
 import asyncio
-import json
 import logging
 from datetime import date, datetime
 from decimal import Decimal
@@ -7,12 +6,10 @@ from functools import lru_cache
 from pathlib import Path
 
 from langchain_community.utilities.sql_database import SQLDatabase
-from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from agent_core import AgentRuntime
-from agent_core.models import ModelResponse
+from agent_core.model_adapter import OpenAIModelAdapter
 from agent_core.rag import MarkdownKnowledgeRetriever
 from agent_core.session import FallbackConversationStore, MemoryConversationStore, RedisConversationStore
 from backend.config import get_settings
@@ -117,33 +114,6 @@ def _get_sync_db() -> SQLDatabase:
     return db
 
 
-class _SQLPlan(BaseModel):
-    sql: str = Field(description="一条只读 MySQL SELECT 或 WITH 查询，不包含 Markdown")
-
-
-def _model_response(message) -> ModelResponse:
-    usage = getattr(message, "usage_metadata", None) or {}
-    return ModelResponse(
-        content=str(message.content),
-        input_tokens=usage.get("input_tokens"),
-        output_tokens=usage.get("output_tokens"),
-        total_tokens=usage.get("total_tokens"),
-    )
-
-
-def _runtime_llm() -> ChatOpenAI:
-    if not settings.llm_api_key:
-        raise RuntimeError("模型未配置")
-    return ChatOpenAI(
-        api_key=settings.llm_api_key,
-        base_url=settings.llm_base_url,
-        model=settings.llm_model,
-        temperature=0,
-        timeout=120,
-        max_retries=1,
-    )
-
-
 _knowledge_retriever = MarkdownKnowledgeRetriever(
     Path(__file__).resolve().parents[2] / "ai-ecommerce-assistant" / "knowledge_base"
 )
@@ -157,57 +127,17 @@ async def _runtime_schema() -> str:
     return await asyncio.to_thread(_get_sync_db().get_table_info, ["orders"])
 
 
-async def _runtime_generate_sql(query, schema, history, sources, previous_error) -> ModelResponse:
-    source_context = "\n".join(f"{item.section}: {item.snippet}" for item in sources)
-    history_context = json.dumps(history[-6:], ensure_ascii=False)
-    prompt = f"""你是只读电商 Text-to-SQL 模块。只返回结构化 sql 字段。
-{BUSINESS_CONTEXT}
-
-表结构：
-{schema}
-
-知识来源：
-{source_context or '无'}
-
-最近会话：{history_context}
-用户问题：{query}
-上次脱敏错误：{previous_error or '无'}
-
-必须生成单条 SELECT/WITH 查询，不得写库，不得查询个人隐私。"""
-    structured = _runtime_llm().with_structured_output(_SQLPlan, include_raw=True)
-    response = await structured.ainvoke(prompt)
-    parsed = response.get("parsed") if isinstance(response, dict) else None
-    if parsed is None:
-        raise ValueError("模型未返回合法的结构化 SQL")
-    raw = response.get("raw")
-    model = _model_response(raw) if raw is not None else ModelResponse(content="")
-    model.content = parsed.sql
-    return model
-
-
 async def _runtime_execute(sql: str) -> list[dict]:
     # AST 层之后仍保留执行器黑名单与数据库只读账户两层防护。
     return await asyncio.to_thread(_execute_query_with_columns, sql)
 
 
-async def _runtime_answer(query, intent, history, sources, sql, rows) -> ModelResponse:
-    if not settings.llm_api_key:
-        if sources:
-            summary = "\n".join(f"- {item.section}：{item.snippet}" for item in sources)
-            return ModelResponse(f"当前未配置模型，已返回最相关的业务知识：\n{summary}")
-        return ModelResponse("⚠️ AI功能未配置，请在 .env 中设置 LLM_API_KEY。")
-    source_context = "\n".join(
-        f"[{item.filename} / {item.section}] {item.snippet}" for item in sources
-    )
-    prompt = f"""你是电商数据分析助手。根据已验证的工具结果用中文简洁回答，不得编造。
-问题：{query}
-意图：{intent}
-最近会话：{json.dumps(history[-6:], ensure_ascii=False)}
-引用知识：{source_context or '无'}
-SQL：{sql or '未执行'}
-结果：{json.dumps(rows[:50], ensure_ascii=False)}
-若结果为空，请明确说明；引用知识时说明来源文件和章节。"""
-    return _model_response(await _runtime_llm().ainvoke(prompt))
+_model_adapter = OpenAIModelAdapter(
+    api_key=settings.llm_api_key,
+    base_url=settings.llm_base_url,
+    model=settings.llm_model,
+    business_context=BUSINESS_CONTEXT,
+)
 
 
 def _conversation_store():
@@ -219,9 +149,9 @@ def _conversation_store():
 _runtime = AgentRuntime(
     retriever=_runtime_retrieve,
     schema_loader=_runtime_schema,
-    sql_generator=_runtime_generate_sql,
+    sql_generator=_model_adapter.generate_sql,
     sql_executor=_runtime_execute,
-    answer_generator=_runtime_answer,
+    answer_generator=_model_adapter.answer,
     conversations=_conversation_store(),
     sql_timeout_seconds=10,
 )
