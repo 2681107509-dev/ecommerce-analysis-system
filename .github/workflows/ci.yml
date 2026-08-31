@@ -165,7 +165,10 @@ jobs:
           ruff --version
 
       - name: 静态检查
-        run: ruff check backend ai-ecommerce-assistant streamlit_app.py scripts
+        run: ruff check agent_core backend ai-ecommerce-assistant streamlit_app.py scripts
+
+      - name: Agent 离线路由评测
+        run: python -m agent_core.evaluation
 
       - name: 编译检查所有 .py 文件
         run: |
