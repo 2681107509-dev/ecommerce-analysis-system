@@ -48,5 +48,11 @@ test_*.json
 
 # 工具内部计划文件（不入库）
 .zcode/
+.workbuddy-ai/
+
+# 宣传视频仅保留可复现源码；依赖、渲染产物和临时分析不入库
+video-promo/node_modules/
+video-promo/out/
+video-promo/.cache/
 # 含真实凭据的轮换脚本（仅本地执行）
 deploy/sql/rotate_credentials.local.sql

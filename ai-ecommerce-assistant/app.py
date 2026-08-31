@@ -1,24 +1,25 @@
+import ast
+import datetime
+import decimal
+import hashlib
+import html
+import json
+import logging
 import os
 import re
 import sys
-import json
-import ast
 import time
-import datetime
-import hashlib
-import decimal
-import logging
-import html
-from urllib.parse import quote_plus
 from pathlib import Path
+from urllib.parse import quote_plus
+
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 from dotenv import load_dotenv
+from langchain_community.agent_toolkits import SQLDatabaseToolkit, create_sql_agent
 from langchain_community.utilities.sql_database import SQLDatabase
 from langchain_openai import ChatOpenAI
-from langchain_community.agent_toolkits import create_sql_agent, SQLDatabaseToolkit
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
@@ -26,15 +27,15 @@ from sqlalchemy.engine import Engine
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
-from backend.utils.text_cleaner import clean_sql, sanitize_error  # noqa: E402
-from backend.utils.sql_guard import (  # noqa: E402
+# 业务知识来源抽取（无 streamlit 依赖，便于单元测试）
+from rag import extract_rag_sources
+from rag import metrics as rag_metrics
+
+from backend.utils.sql_guard import (
     ensure_read_only_sql,
     guard_read_only_engine,
 )
-
-# 业务知识来源抽取（无 streamlit 依赖，便于单元测试）
-from rag import extract_rag_sources  # noqa: E402
-from rag import metrics as rag_metrics  # noqa: E402
+from backend.utils.text_cleaner import clean_sql, sanitize_error
 
 load_dotenv(os.path.join(_PROJECT_ROOT, ".env"))
 
@@ -208,6 +209,13 @@ if "query_cache" not in st.session_state:
 if "query_history" not in st.session_state:
     st.session_state.query_history = []
 
+if "model_api_key" not in st.session_state:
+    st.session_state.model_api_key = API_KEY or ""
+if "model_base_url" not in st.session_state:
+    st.session_state.model_base_url = BASE_URL
+if "model_name" not in st.session_state:
+    st.session_state.model_name = MODEL_NAME
+
 
 def get_db_uri():
     if USE_MYSQL:
@@ -254,7 +262,7 @@ def init_retriever():
         (retriever, status_dict) 元组。status_dict 包含 ok / error / count。
     """
     try:
-        from rag import VectorStore, Retriever, get_embeddings
+        from rag import Retriever, VectorStore, get_embeddings
         embed = get_embeddings()
         store = VectorStore(embedding=embed)
         retriever = Retriever(store, k=3, score_threshold=0.4)
@@ -273,12 +281,11 @@ def init_retriever():
         }
 
 
-@st.cache_resource
-def init_agent(_db, _retriever):
+def init_agent(_db, _retriever, api_key: str, base_url: str, model_name: str):
     llm = ChatOpenAI(
-        api_key=API_KEY,
-        base_url=BASE_URL,
-        model=MODEL_NAME,
+        api_key=api_key,
+        base_url=base_url,
+        model=model_name,
         temperature=0.1,
     )
     toolkit = SQLDatabaseToolkit(db=_db, llm=llm)
@@ -323,6 +330,27 @@ def init_agent(_db, _retriever):
         handle_parsing_errors=True,
         agent_executor_kwargs={"return_intermediate_steps": True},
     )
+
+
+def get_session_agent(_db, _retriever):
+    """按当前 Streamlit 会话缓存 Agent，不把用户 API Key 写入全局缓存。"""
+    api_key = st.session_state.get("model_api_key", "").strip()
+    if _db is None or not api_key:
+        return None
+
+    base_url = st.session_state.get("model_base_url", BASE_URL).strip()
+    model_name = st.session_state.get("model_name", MODEL_NAME).strip()
+    fingerprint = hashlib.sha256(f"{api_key}:{base_url}:{model_name}".encode()).hexdigest()
+    if st.session_state.get("agent_fingerprint") != fingerprint:
+        st.session_state.agent_instance = init_agent(
+            _db,
+            _retriever,
+            api_key=api_key,
+            base_url=base_url,
+            model_name=model_name,
+        )
+        st.session_state.agent_fingerprint = fingerprint
+    return st.session_state.get("agent_instance")
 
 
 def detect_chart_type(df: pd.DataFrame, question: str = "") -> str:
@@ -395,13 +423,13 @@ def create_chart(df: pd.DataFrame, title: str = "", question: str = "") -> go.Fi
         fig.update_traces(line_width=3, marker_size=10,
                           fill='tozeroy', fillcolor='rgba(129,140,248,0.1)')
         fig.add_scatter(x=df[x_col], y=df[y_col], mode='markers',
-                        marker=dict(size=12, color="#FACC15", line=dict(width=2, color='#fff')), showlegend=False)
+                        marker={"size": 12, "color": "#FACC15", "line": {"width": 2, "color": '#fff'}}, showlegend=False)
 
     elif chart_type == "pie":
         fig = px.pie(df, names=x_col, values=y_col, template="plotly_dark", title=title,
                      hole=0.4, color_discrete_sequence=px.colors.qualitative.Set2)
         fig.update_traces(textposition='inside', textinfo='percent+label',
-                          textfont=dict(size=13, color='white'),
+                          textfont={"size": 13, "color": 'white'},
                           hovertemplate='<b>%{label}</b><br>数值: %{value:,.2f}<br>占比: %{percent}<extra></extra>',
                           pull=[0.02] * len(df))
 
@@ -452,14 +480,14 @@ def create_chart(df: pd.DataFrame, title: str = "", question: str = "") -> go.Fi
                     y=[x_label],
                     orientation='h',
                     name=x_label,
-                    marker=dict(
-                        color=bar_colors[i % len(bar_colors)],
-                        line=dict(width=0, color='rgba(255,255,255,0)'),
-                        cornerradius=4,
-                    ),
+                    marker={
+                        "color": bar_colors[i % len(bar_colors)],
+                        "line": {"width": 0, "color": 'rgba(255,255,255,0)'},
+                        "cornerradius": 4,
+                    },
                     text=y_text,
                     textposition='outside',
-                    textfont=dict(size=14, color='#E4E4E7', family='monospace'),
+                    textfont={"size": 14, "color": '#E4E4E7', "family": 'monospace'},
                     hovertemplate=f'<b>{x_label}</b><br>%{{x:,.0f}}<extra></extra>',
                 ))
 
@@ -484,14 +512,14 @@ def create_chart(df: pd.DataFrame, title: str = "", question: str = "") -> go.Fi
                     y=[x_label],
                     orientation='h',
                     name=x_label,
-                    marker=dict(
-                        color=bar_colors[(n_items - 1 - i) % len(bar_colors)],
-                        line=dict(width=0, color='rgba(255,255,255,0)'),
-                        cornerradius=4,
-                    ),
+                    marker={
+                        "color": bar_colors[(n_items - 1 - i) % len(bar_colors)],
+                        "line": {"width": 0, "color": 'rgba(255,255,255,0)'},
+                        "cornerradius": 4,
+                    },
                     text=y_text,
                     textposition='outside',
-                    textfont=dict(size=14, color='#E4E4E7', family='monospace'),
+                    textfont={"size": 14, "color": '#E4E4E7', "family": 'monospace'},
                     hovertemplate=f'<b>{x_label}</b><br>%{{x:,.0f}}<extra></extra>',
                 ))
 
@@ -501,30 +529,30 @@ def create_chart(df: pd.DataFrame, title: str = "", question: str = "") -> go.Fi
         fig = go.Figure()
 
     fig.update_layout(
-        title=dict(text=title, x=0.02, xanchor='left', y=0.97, yanchor='top',
-                   font=dict(size=18, color='#818CF8')),
-        margin=dict(l=80 if chart_type in ["bar_h", "bar"] else 30,
-                    r=100 if chart_type in ["bar_h", "bar"] else 30,
-                    t=70, b=50),
+        title={"text": title, "x": 0.02, "xanchor": 'left', "y": 0.97, "yanchor": 'top',
+                   "font": {"size": 18, "color": '#818CF8'}},
+        margin={"l": 80 if chart_type in ["bar_h", "bar"] else 30,
+                    "r": 100 if chart_type in ["bar_h", "bar"] else 30,
+                    "t": 70, "b": 50},
         paper_bgcolor='rgba(0,0,0,0)',
         plot_bgcolor='rgba(15,17,23,0.8)',
-        font=dict(color='#E4E4E7', size=13),
-        title_font=dict(size=16, color='#818CF8'),
+        font={"color": '#E4E4E7', "size": 13},
+        title_font={"size": 16, "color": '#818CF8'},
         showlegend=False,
-        xaxis=dict(
-            showgrid=False if chart_type in ["bar_h", "bar"] else True,
-            gridcolor='rgba(255,255,255,0.05)',
-            showticklabels=False if chart_type in ["bar_h", "bar"] else True,
-            tickangle=-20 if chart_type == "line" else 0,
-            tickfont=dict(size=11),
-            zeroline=False,
-            range=[0, None] if chart_type in ["bar_h", "bar"] else None,
-        ),
-        yaxis=dict(
-            showgrid=True if chart_type in ["bar_h", "bar"] else True,
-            gridcolor='rgba(255,255,255,0.05)',
-            tickfont=dict(size=11),
-        ),
+        xaxis={
+            "showgrid": False if chart_type in ["bar_h", "bar"] else True,
+            "gridcolor": 'rgba(255,255,255,0.05)',
+            "showticklabels": False if chart_type in ["bar_h", "bar"] else True,
+            "tickangle": -20 if chart_type == "line" else 0,
+            "tickfont": {"size": 11},
+            "zeroline": False,
+            "range": [0, None] if chart_type in ["bar_h", "bar"] else None,
+        },
+        yaxis={
+            "showgrid": True if chart_type in ["bar_h", "bar"] else True,
+            "gridcolor": 'rgba(255,255,255,0.05)',
+            "tickfont": {"size": 11},
+        },
         hovermode='closest',
         bargap=0.5,
     )
@@ -1068,9 +1096,40 @@ try:
 except Exception as e:
     logger.error("RAG 初始化异常: %s", e)
     retriever, rag_status = None, {"ok": False, "error": str(e), "count": 0}
-agent = init_agent(db, retriever) if db else None
+agent = get_session_agent(db, retriever)
 
 with st.sidebar:
+    with st.expander("⚙️ 模型连接", expanded=not bool(st.session_state.model_api_key)):
+        with st.form("model_connection_form"):
+            model_base_url = st.text_input(
+                "API Base URL",
+                value=st.session_state.model_base_url,
+                placeholder="https://api.deepseek.com",
+            )
+            model_name = st.text_input(
+                "模型名称",
+                value=st.session_state.model_name,
+                placeholder="deepseek-chat",
+            )
+            model_api_key = st.text_input(
+                "API Key",
+                value=st.session_state.model_api_key,
+                type="password",
+                help="仅保存在当前浏览器会话，不写入文件或日志。",
+            )
+            if st.form_submit_button("应用配置", use_container_width=True):
+                st.session_state.model_base_url = model_base_url.strip()
+                st.session_state.model_name = model_name.strip()
+                st.session_state.model_api_key = model_api_key.strip()
+                st.session_state.pop("agent_instance", None)
+                st.session_state.pop("agent_fingerprint", None)
+                st.rerun()
+
+        if st.session_state.model_api_key:
+            st.success("模型凭据已在当前会话中配置")
+        else:
+            st.info("配置兼容 OpenAI API 的模型后即可开始查询")
+
     st.divider()
     with st.expander("📚 RAG 知识库", expanded=False):
         if rag_status.get("ok"):
@@ -1169,7 +1228,7 @@ with st.sidebar:
     db_type = "MySQL" if USE_MYSQL else "SQLite"
     db_label = "MySQL (ai_commerce_intelligence_platform)" if USE_MYSQL else "SQLite (本地)"
     st.caption(f"🗄️ 数据库：{db_label}")
-    st.caption(f"🧠 模型：{MODEL_NAME}")
+    st.caption(f"🧠 模型：{st.session_state.model_name}")
 
 for msg_idx, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"]):
@@ -1262,7 +1321,7 @@ if hasattr(st.session_state, "pending_question"):
 
 if prompt:
     if not agent:
-        st.error("请先检查 .env 中的 API Key 和数据库密码是否正确。")
+        st.error("请先在侧栏配置模型 API Key，并检查数据库连接。")
         st.stop()
 
     if is_sensitive_query(prompt):

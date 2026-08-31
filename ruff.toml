@@ -1,0 +1,24 @@
+target-version = "py312"
+line-length = 120
+
+[lint]
+ignore = [
+    "G004", # 项目现有日志同时使用 f-string 与参数化格式，暂不做无关重写
+]
+
+[lint.per-file-ignores]
+"backend/routes/**/*.py" = ["B008"]
+"backend/tests/**/*.py" = ["B008", "S110", "BLE001", "DTZ005"]
+"ai-ecommerce-assistant/tests/**/*.py" = ["B008", "S110", "BLE001", "DTZ005", "PERF"]
+"ai-ecommerce-assistant/rag/**/*.py" = ["BLE001", "S110"]
+"backend/utils/cache.py" = ["BLE001", "S110"]
+"backend/routes/monitor.py" = ["BLE001"]
+"backend/database.py" = ["BLE001"]
+"streamlit_app.py" = ["BLE001"]
+
+# 这些可执行入口必须先把仓库根目录加入 sys.path，之后才能导入共享包。
+"ai-ecommerce-assistant/app.py" = ["E402"]
+"ai-ecommerce-assistant/build_knowledge_base.py" = ["BLE001", "S110", "E402"]
+"ai-ecommerce-assistant/eval/run_eval.py" = ["E402"]
+"backend/scripts/**/*.py" = ["BLE001", "E402"]
+"scripts/**/*.py" = ["BLE001"]
