@@ -3,6 +3,7 @@ import hashlib
 import json
 import logging
 import re
+import time
 from datetime import date, datetime
 from decimal import Decimal
 from functools import lru_cache
@@ -13,8 +14,9 @@ from langchain_openai import ChatOpenAI
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
+from agent_core import AgentWorkflow
 from backend.config import get_settings
-from backend.models.schemas import AIQueryResponse
+from backend.models.schemas import AIQueryResponse, AgentUsage
 from backend.utils.sql_guard import guard_read_only_engine, is_read_only_sql
 from backend.utils.text_cleaner import clean_sql as _clean_sql
 
@@ -255,7 +257,7 @@ async def _get_agent():
         return agent
 
 
-async def process_natural_language_query(query: str) -> AIQueryResponse:
+async def _execute_natural_language_query(query: str) -> AIQueryResponse:
     """处理自然语言查询，返回SQL执行结果"""
     if _is_sensitive(query):
         return AIQueryResponse(
@@ -403,3 +405,23 @@ async def process_natural_language_query(query: str) -> AIQueryResponse:
             answer="⚠️ 查询处理失败，请稍后重试",
             visualization=None,
         )
+
+
+_workflow = AgentWorkflow(_execute_natural_language_query)
+
+
+async def process_natural_language_query(query: str, thread_id: str | None = None) -> AIQueryResponse:
+    """通过共享状态图执行查询，并返回可公开的路由与节点轨迹。"""
+    started = time.perf_counter()
+    state = await _workflow.invoke(query, thread_id)
+    result: AIQueryResponse = state["result"]
+    latency_ms = max(0, round((time.perf_counter() - started) * 1000))
+    return result.model_copy(
+        update={
+            "request_id": state["request_id"],
+            "thread_id": state["thread_id"],
+            "intent": state["intent"],
+            "steps": state.get("steps", []),
+            "usage": AgentUsage(latency_ms=latency_ms),
+        }
+    )

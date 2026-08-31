@@ -1,5 +1,5 @@
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -115,6 +115,21 @@ class CategoryAnalysisResponse(BaseModel):
 
 class AIQueryRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=500, description="自然语言查询")
+    thread_id: str | None = Field(None, min_length=1, max_length=128, description="多轮会话标识")
+
+
+class AgentStep(BaseModel):
+    name: str = Field(..., description="工作流节点名称")
+    status: Literal["success", "error"] = Field("success", description="节点状态")
+    duration_ms: int = Field(0, ge=0, description="节点耗时（毫秒）")
+    summary: str = Field(..., description="可公开的动作摘要，不包含模型思维链")
+
+
+class AgentUsage(BaseModel):
+    input_tokens: int = Field(0, ge=0)
+    output_tokens: int = Field(0, ge=0)
+    total_tokens: int = Field(0, ge=0)
+    latency_ms: int = Field(0, ge=0)
 
 
 class AIQueryResponse(BaseModel):
@@ -123,6 +138,12 @@ class AIQueryResponse(BaseModel):
     answer: str = Field(..., description="AI回答文本")
     visualization: dict[str, Any] | None = Field(None, description="可视化配置")
     sql_error: str | None = Field(None, description="SQL执行失败时的错误说明；为空表示执行成功或未执行")
+    request_id: str | None = Field(None, description="本次 Agent 请求标识")
+    thread_id: str | None = Field(None, description="多轮会话标识")
+    intent: Literal["data", "knowledge", "hybrid", "clarification", "blocked"] | None = None
+    sources: list[dict[str, Any]] = Field(default_factory=list, description="RAG 引用来源")
+    steps: list[AgentStep] = Field(default_factory=list, description="可公开的执行轨迹")
+    usage: AgentUsage | None = Field(None, description="模型 Token 与端到端耗时")
 
 
 class ErrorResponse(BaseModel):

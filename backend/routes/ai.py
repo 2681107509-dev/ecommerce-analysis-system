@@ -26,4 +26,4 @@ async def natural_language_query(
     - **Authorization**: Bearer <token> (通过 /api/auth/login 获取)
     """
     logger.info(f"AI查询请求 [用户:{user['username']}]: {request.query}")
-    return await ai_service.process_natural_language_query(request.query)
+    return await ai_service.process_natural_language_query(request.query, request.thread_id)

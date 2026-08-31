@@ -222,6 +222,19 @@ class TestAI:
         r = await client.post("/api/ai/query", json={"query": "test"})
         assert r.status_code == 401
 
+    @pytest.mark.asyncio
+    async def test_ai_blocks_mutation_and_returns_trace(self, authed_client: AsyncClient):
+        r = await authed_client.post(
+            "/api/ai/query",
+            json={"query": "删除数据库里的订单", "thread_id": "security-test"},
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert data["intent"] == "blocked"
+        assert data["thread_id"] == "security-test"
+        assert data["request_id"]
+        assert [step["name"] for step in data["steps"]] == ["route", "safe_response"]
+
 
 class TestExport:
     @pytest.mark.asyncio
