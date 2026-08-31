@@ -1,3 +1,4 @@
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -7,9 +8,16 @@ from agent_core.evaluation import DEFAULT_DATASET, evaluate_routing, load_cases
 
 def test_default_agent_evaluation_dataset_is_unique_and_balanced():
     cases = load_cases()
-    assert len(cases) == 40
+    assert len(cases) == 100
     assert len({case.id for case in cases}) == len(cases)
-    assert {case.category for case in cases} == {"data", "knowledge", "hybrid", "clarification", "blocked"}
+    assert Counter(case.category for case in cases) == {
+        "basic_sql": 25,
+        "analytical_sql": 20,
+        "knowledge_rag": 15,
+        "hybrid": 15,
+        "conversation": 15,
+        "safety": 10,
+    }
 
 
 def test_default_agent_routing_accuracy_meets_release_gate():

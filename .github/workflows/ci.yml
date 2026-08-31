@@ -173,6 +173,6 @@ jobs:
       - name: 编译检查所有 .py 文件
         run: |
           # compileall 会自动跳过 __pycache__ / 没有 .py 的目录
-          python -m compileall -q backend ai-ecommerce-assistant streamlit_app.py \
+          python -m compileall -q agent_core backend ai-ecommerce-assistant streamlit_app.py scripts \
             || (echo "❌ 语法错误"; exit 1)
           echo "✅ 所有 Python 文件语法 OK"

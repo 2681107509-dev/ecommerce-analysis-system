@@ -1131,12 +1131,33 @@ with st.sidebar:
                 type="password",
                 help="仅保存在当前浏览器会话，不写入文件或日志。",
             )
-            if st.form_submit_button("应用配置", use_container_width=True):
+            apply_config = st.form_submit_button("应用配置", use_container_width=True)
+            test_connection = st.form_submit_button("测试连接", use_container_width=True)
+            if apply_config or test_connection:
                 st.session_state.model_base_url = model_base_url.strip()
                 st.session_state.model_name = model_name.strip()
                 st.session_state.model_api_key = model_api_key.strip()
                 st.session_state.pop("agent_instance", None)
                 st.session_state.pop("agent_fingerprint", None)
+            if test_connection:
+                if not model_api_key.strip():
+                    st.warning("请先填写 API Key")
+                else:
+                    try:
+                        probe = ChatOpenAI(
+                            api_key=model_api_key.strip(),
+                            base_url=model_base_url.strip(),
+                            model=model_name.strip(),
+                            temperature=0,
+                            timeout=15,
+                            max_retries=0,
+                            max_tokens=1,
+                        )
+                        probe.invoke("仅回复 OK")
+                        st.success("连接成功，模型已响应")
+                    except Exception as exc:
+                        st.error(f"连接失败：{sanitize_error(exc)}")
+            if apply_config:
                 st.rerun()
 
         if st.session_state.model_api_key:

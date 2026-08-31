@@ -126,10 +126,18 @@ class AgentStep(BaseModel):
 
 
 class AgentUsage(BaseModel):
-    input_tokens: int = Field(0, ge=0)
-    output_tokens: int = Field(0, ge=0)
-    total_tokens: int = Field(0, ge=0)
+    input_tokens: int | None = Field(None, ge=0)
+    output_tokens: int | None = Field(None, ge=0)
+    total_tokens: int | None = Field(None, ge=0)
     latency_ms: int = Field(0, ge=0)
+
+
+class AgentSource(BaseModel):
+    filename: str
+    section: str = ""
+    doc_type: str = ""
+    score: float = Field(0, ge=0)
+    snippet: str = ""
 
 
 class AIQueryResponse(BaseModel):
@@ -141,7 +149,7 @@ class AIQueryResponse(BaseModel):
     request_id: str | None = Field(None, description="本次 Agent 请求标识")
     thread_id: str | None = Field(None, description="多轮会话标识")
     intent: Literal["data", "knowledge", "hybrid", "clarification", "blocked"] | None = None
-    sources: list[dict[str, Any]] = Field(default_factory=list, description="RAG 引用来源")
+    sources: list[AgentSource] = Field(default_factory=list, description="RAG 引用来源")
     steps: list[AgentStep] = Field(default_factory=list, description="可公开的执行轨迹")
     usage: AgentUsage | None = Field(None, description="模型 Token 与端到端耗时")
 

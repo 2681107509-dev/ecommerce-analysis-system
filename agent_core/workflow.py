@@ -14,11 +14,12 @@ AgentIntent = Literal["data", "knowledge", "hybrid", "clarification", "blocked"]
 Executor = Callable[[str], Awaitable[Any]]
 
 _KNOWLEDGE_MARKERS = ("定义", "含义", "怎么算", "如何计算", "公式", "规则", "标准", "正常")
-_DATA_MARKERS = ("多少", "最高", "最低", "排名", "趋势", "最近", "订单", "销售额", "同比", "环比", "top")
+_CONCRETE_DATA_MARKERS = ("多少", "最多", "最高", "最低", "排名", "趋势", "最近", "同比", "环比", "top", "各平台", "当前")
 _BLOCKED_PATTERNS = (
-    r"密码|手机号|身份证|个人隐私|具体地址",
+    r"密码|手机号|身份证|个人隐私|具体地址|api.?key|环境变量|系统提示词",
     r"(?:删除|修改|写入|清空|更新).*(?:数据库|数据|订单|表)",
     r"\b(?:drop|delete|update|insert|alter|truncate)\b",
+    r"忽略(?:以上|之前|系统).*(?:指令|提示词)|ignore previous instructions",
 )
 _VAGUE_QUERIES = {"分析一下", "看看数据", "帮我分析", "查一下", "分析数据"}
 
@@ -40,8 +41,7 @@ def classify_intent(query: str) -> AgentIntent:
     if len(normalized) < 4 or normalized in _VAGUE_QUERIES:
         return "clarification"
     has_knowledge = any(marker in normalized for marker in _KNOWLEDGE_MARKERS)
-    has_data = any(marker in normalized for marker in _DATA_MARKERS)
-    if has_knowledge and has_data:
+    if has_knowledge and any(marker in normalized for marker in _CONCRETE_DATA_MARKERS):
         return "hybrid"
     if has_knowledge:
         return "knowledge"
@@ -93,14 +93,14 @@ class AgentWorkflow:
         return {"result": result, "steps": [*state.get("steps", []), event]}
 
     async def _respond_without_execution(self, state: AgentState) -> dict[str, Any]:
-        from backend.models.schemas import AIQueryResponse
+        from agent_core.models import AgentResult
 
         started = time.perf_counter()
         if state["intent"] == "blocked":
             answer = "⚠️ 仅支持聚合分析和只读查询，不能提供隐私数据或修改数据库。"
         else:
             answer = "请补充要分析的指标、时间范围或维度，例如“最近30天各平台销售额趋势”。"
-        result = AIQueryResponse(answer=answer)
+        result = AgentResult(answer=answer)
         event = _step("safe_response", started, "未调用模型和数据库，返回安全澄清响应")
         return {"result": result, "steps": [*state.get("steps", []), event]}
 

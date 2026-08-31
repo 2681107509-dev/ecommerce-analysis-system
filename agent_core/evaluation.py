@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 from collections import Counter
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from agent_core.rag import MarkdownKnowledgeRetriever
 from agent_core.workflow import AgentIntent, classify_intent
 
 DEFAULT_DATASET = Path(__file__).with_name("eval") / "agent_cases.jsonl"
+DEFAULT_RAG_DATASET = Path(__file__).with_name("eval") / "rag_cases.jsonl"
+DEFAULT_KNOWLEDGE_DIR = Path(__file__).resolve().parents[1] / "ai-ecommerce-assistant" / "knowledge_base"
 
 
 @dataclass(frozen=True)
@@ -20,6 +24,13 @@ class EvaluationCase:
     category: str
     query: str
     expected_intent: AgentIntent
+
+
+@dataclass(frozen=True)
+class RAGEvaluationCase:
+    id: str
+    query: str
+    expected_source: str
 
 
 def load_cases(path: Path = DEFAULT_DATASET) -> list[EvaluationCase]:
@@ -64,6 +75,39 @@ def evaluate_routing(cases: list[EvaluationCase]) -> dict[str, Any]:
     }
 
 
+def load_rag_cases(path: Path = DEFAULT_RAG_DATASET) -> list[RAGEvaluationCase]:
+    return [
+        RAGEvaluationCase(**json.loads(line))
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+async def evaluate_retrieval(
+    cases: list[RAGEvaluationCase],
+    knowledge_dir: Path = DEFAULT_KNOWLEDGE_DIR,
+) -> dict[str, Any]:
+    retriever = MarkdownKnowledgeRetriever(knowledge_dir)
+    reciprocal_ranks: list[float] = []
+    failures: list[dict[str, Any]] = []
+    for case in cases:
+        sources = await retriever.retrieve(case.query, top_k=3)
+        filenames = [source.filename for source in sources]
+        try:
+            rank = filenames.index(case.expected_source) + 1
+        except ValueError:
+            rank = 0
+            failures.append({**asdict(case), "actual_sources": filenames})
+        reciprocal_ranks.append(1 / rank if rank else 0)
+    hits = len(cases) - len(failures)
+    return {
+        "total": len(cases),
+        "recall_at_3_pct": round(hits / len(cases) * 100, 2),
+        "mrr": round(sum(reciprocal_ranks) / len(cases), 4),
+        "failures": failures,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="运行 Agent 离线路由评测")
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET)
@@ -71,12 +115,14 @@ def main() -> int:
     args = parser.parse_args()
 
     report = evaluate_routing(load_cases(args.dataset))
+    report["retrieval"] = asyncio.run(evaluate_retrieval(load_rag_cases()))
     rendered = json.dumps(report, ensure_ascii=False, indent=2)
     print(rendered)
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(rendered + "\n", encoding="utf-8")
-    return 0 if report["accuracy_pct"] >= 90 else 1
+    passed = report["accuracy_pct"] >= 90 and report["retrieval"]["recall_at_3_pct"] >= 80
+    return 0 if passed else 1
 
 
 if __name__ == "__main__":
