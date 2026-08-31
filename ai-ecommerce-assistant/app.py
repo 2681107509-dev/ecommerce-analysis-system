@@ -149,18 +149,32 @@ st.set_page_config(page_title="AI Commerce Intelligence Platform", page_icon="ðŸ
 
 st.markdown("""
 <style>
-    [data-testid="stSidebar"] { min-width: 300px; max-width: 360px; }
+    :root { --brand: #1565C0; --ink: #0F172A; --muted: #64748B; --surface: #FFFFFF; }
+    .stApp { background: #F6F8FC; color: var(--ink); }
+    .block-container { max-width: 1380px; padding-top: 2rem; padding-bottom: 7rem; }
+    [data-testid="stHeader"] { background: rgba(246, 248, 252, .8); }
+    [data-testid="stSidebar"] {
+        min-width: 300px; max-width: 340px; background: #EEF2F7; color: var(--ink);
+        border-right: 1px solid #E2E8F0;
+    }
+    [data-testid="stChatMessage"] {
+        background: var(--surface); border: 1px solid #E2E8F0; border-radius: 14px;
+        padding: .75rem 1rem; box-shadow: 0 4px 16px rgba(15,23,42,.04);
+    }
+    [data-testid="stChatInput"] { border-color: #94A3B8; border-radius: 14px; }
+    h1, h2, h3 { color: var(--ink); letter-spacing: -.02em; }
+    .stButton > button { border-radius: 10px; border-color: #CBD5E1; }
     .step-indicator {
         display: flex; gap: 8px; align-items: center;
         padding: 12px 16px; border-radius: 8px;
-        background: rgba(79,70,229,0.1); margin-bottom: 12px;
+        background: #EFF6FF; border: 1px solid #DBEAFE; margin-bottom: 12px;
     }
     .step-item { font-size: 14px; }
-    .step-done { color: #22C55E; }
-    .step-active { color: #FACC15; animation: pulse 1s infinite; }
-    .step-pending { color: #6B7280; }
+    .step-done { color: #16A34A; }
+    .step-active { color: #1565C0; font-weight: 700; }
+    .step-pending { color: #94A3B8; }
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
-    .highlight-num { color: #818CF8; font-weight: 700; font-size: 1.1em; }
+    .highlight-num { color: #1565C0; font-weight: 700; font-size: 1.1em; }
     .warning-box {
         background: rgba(234,179,8,0.1); border-left: 4px solid #EAB308;
         padding: 10px 14px; border-radius: 6px; margin: 8px 0;
@@ -172,18 +186,18 @@ st.markdown("""
     }
     .sql-copy-btn {
         position: absolute; top: 6px; right: 6px;
-        background: rgba(79,70,229,0.3); border: 1px solid #4F46E5;
+        background: rgba(21,101,192,0.35); border: 1px solid #3B82F6;
         color: #E4E4E7; padding: 2px 10px; border-radius: 4px;
         cursor: pointer; font-size: 11px;
     }
-    .sql-copy-btn:hover { background: rgba(79,70,229,0.6); }
-    .query-time { color: #9CA3AF; font-size: 12px; margin-top: 4px; }
+    .sql-copy-btn:hover { background: rgba(21,101,192,0.65); }
+    .query-time { color: var(--muted); font-size: 12px; margin-top: 4px; }
     .history-item {
         padding: 6px 10px; border-radius: 6px; margin-bottom: 4px;
-        background: rgba(79,70,229,0.08); cursor: pointer;
+        background: rgba(21,101,192,0.07); cursor: pointer;
         transition: background 0.2s; font-size: 13px;
     }
-    .history-item:hover { background: rgba(79,70,229,0.2); }
+    .history-item:hover { background: rgba(21,101,192,0.16); }
 </style>
 """, unsafe_allow_html=True)
 
@@ -487,7 +501,7 @@ def create_chart(df: pd.DataFrame, title: str = "", question: str = "") -> go.Fi
                     },
                     text=y_text,
                     textposition='outside',
-                    textfont={"size": 14, "color": '#E4E4E7', "family": 'monospace'},
+                    textfont={"size": 14, "color": '#334155', "family": 'monospace'},
                     hovertemplate=f'<b>{x_label}</b><br>%{{x:,.0f}}<extra></extra>',
                 ))
 
@@ -530,18 +544,18 @@ def create_chart(df: pd.DataFrame, title: str = "", question: str = "") -> go.Fi
 
     fig.update_layout(
         title={"text": title, "x": 0.02, "xanchor": 'left', "y": 0.97, "yanchor": 'top',
-                   "font": {"size": 18, "color": '#818CF8'}},
+                   "font": {"size": 18, "color": '#1565C0'}},
         margin={"l": 80 if chart_type in ["bar_h", "bar"] else 30,
                     "r": 100 if chart_type in ["bar_h", "bar"] else 30,
                     "t": 70, "b": 50},
         paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(15,17,23,0.8)',
-        font={"color": '#E4E4E7', "size": 13},
-        title_font={"size": 16, "color": '#818CF8'},
+        plot_bgcolor='#FFFFFF',
+        font={"color": '#334155', "size": 13},
+        title_font={"size": 16, "color": '#1565C0'},
         showlegend=False,
         xaxis={
             "showgrid": False if chart_type in ["bar_h", "bar"] else True,
-            "gridcolor": 'rgba(255,255,255,0.05)',
+            "gridcolor": '#E2E8F0',
             "showticklabels": False if chart_type in ["bar_h", "bar"] else True,
             "tickangle": -20 if chart_type == "line" else 0,
             "tickfont": {"size": 11},

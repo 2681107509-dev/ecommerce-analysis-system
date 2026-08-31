@@ -1,0 +1,9 @@
+# Streamlit 全局主题配置
+# Streamlit 1.57+ 默认主题会跟随操作系统深浅色模式，导致暗色系统下控件变为暗色、
+# 与页面白色企业主题冲突；此处显式锁定为浅色企业主题，保证本地与 Docker 展示一致。
+[theme]
+base = "light"
+primaryColor = "#1565C0"
+backgroundColor = "#F6F8FC"
+secondaryBackgroundColor = "#EEF2F7"
+textColor = "#0F172A"

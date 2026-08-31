@@ -14,10 +14,12 @@ from backend.utils.rfm_scoring import assign_segment, quantile_scores
 # 全局样式
 # ══════════════════════════════════════════════════════════════
 _PLOTLY_LAYOUT_DEFAULTS = {
-    "template": "plotly_dark",
-    "font": {"family": "Microsoft YaHei, PingFang SC, sans-serif", "size": 13, "color": '#e2e8f0'},
+    "template": "plotly_white",
+    "font": {"family": "Microsoft YaHei, PingFang SC, sans-serif", "size": 13, "color": '#334155'},
     "paper_bgcolor": "rgba(0,0,0,0)",
-    "plot_bgcolor": 'rgba(15,23,42,0.4)',
+    "plot_bgcolor": '#FFFFFF',
+    "xaxis": {"gridcolor": "#E2E8F0", "zerolinecolor": "#CBD5E1"},
+    "yaxis": {"gridcolor": "#E2E8F0", "zerolinecolor": "#CBD5E1"},
 }
 
 # 企业标准色
@@ -50,6 +52,26 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+st.markdown("""
+<style>
+    :root { --brand: #1565C0; --ink: #0F172A; --muted: #64748B; --surface: #FFFFFF; }
+    .stApp { background: #F6F8FC; color: var(--ink); }
+    .block-container { max-width: 1440px; padding-top: 2rem; padding-bottom: 3rem; }
+    [data-testid="stHeader"] { background: rgba(246, 248, 252, .8); }
+    [data-testid="stSidebar"] { background: #EEF2F7; border-right: 1px solid #E2E8F0; color: var(--ink); }
+    [data-testid="stMetric"] {
+        background: var(--surface); border: 1px solid #E2E8F0; border-radius: 14px;
+        padding: 1rem 1.1rem; box-shadow: 0 5px 18px rgba(15, 23, 42, .04);
+    }
+    [data-testid="stMetricLabel"] p { color: var(--muted); }
+    [data-testid="stMetricValue"] { color: var(--ink); }
+    h1, h2, h3 { color: var(--ink); letter-spacing: -.02em; }
+    div[data-testid="stAlert"] { border-radius: 12px; }
+    .stTabs [data-baseweb="tab-list"] { gap: 1.25rem; border-bottom: 1px solid #E2E8F0; }
+    .stTabs [aria-selected="true"] { color: var(--brand); }
+</style>
+""", unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════
 # 数据加载
@@ -140,6 +162,7 @@ if page == "📊 销售总览":
     st.subheader("🏆 商品销售额 TOP10")
     top_products = filtered_df.groupby('商品编号')['付款金额'].sum().nlargest(10).reset_index()
     fig_bar = px.bar(top_products, x='商品编号', y='付款金额', title="销售额 TOP10 商品", color='付款金额', color_continuous_scale='Reds')
+    fig_bar.update_layout(**_PLOTLY_LAYOUT_DEFAULTS)
     fig_bar.update_layout(xaxis_title="商品编号", yaxis_title="销售额 (元)")
     fig_bar.update_traces(texttemplate='%{y:.0f}', textposition='outside')
     st.plotly_chart(fig_bar, width='stretch')
@@ -147,6 +170,7 @@ if page == "📊 销售总览":
     st.subheader("👑 用户消费 TOP10")
     top_users = filtered_df.groupby('用户名')['付款金额'].sum().nlargest(10).reset_index()
     fig_user = px.bar(top_users, x='付款金额', y='用户名', orientation='h', title="消费金额 TOP10 用户", color='付款金额', color_continuous_scale='Viridis')
+    fig_user.update_layout(**_PLOTLY_LAYOUT_DEFAULTS)
     fig_user.update_layout(xaxis_title="消费金额 (元)", yaxis_title="用户")
     fig_user.update_traces(texttemplate='%{x:.0f}', textposition='outside')
     st.plotly_chart(fig_user, width='stretch')
