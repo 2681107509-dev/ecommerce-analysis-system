@@ -10,7 +10,10 @@ RUN --network=host python -m pip install --no-cache-dir --upgrade "pip>=26.1.2" 
     && pip install --no-cache-dir -r requirements.txt
 
 COPY backend/ /app/backend/
+COPY agent_core/ /app/agent_core/
 COPY ai-ecommerce-assistant/ ./
+
+RUN PYTHONPATH=/app python -c "import agent_core"
 
 EXPOSE 8502
 
