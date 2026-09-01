@@ -46,7 +46,9 @@ jobs:
         working-directory: ai-ecommerce-assistant
         # conftest.py 用 FakeEmbeddings，不依赖 BGE 模型下载（约 93MB）
         # tee 到文件 + 上传 artifact：失败时可直接在 GitHub Actions 下载 stderr 排查
-        run: python -m pytest tests/ -v --tb=short 2>&1 | tee pytest-output.txt
+        run: |
+          set -o pipefail
+          python -m pytest tests/ -v --tb=short 2>&1 | tee pytest-output.txt
 
       - name: 上传测试报告
         if: always()
@@ -129,11 +131,13 @@ jobs:
         # 独立初始化脚本不依赖 PYTHONPATH；日志落盘后作为 artifact 上传。
         working-directory: backend
         run: |
+          set -o pipefail
           python scripts/init_ci_schema.py 2>&1 | tee /tmp/init_schema.log
           cat /tmp/init_schema.log
 
       - name: 跑后端测试
         run: |
+          set -o pipefail
           cd backend
           python -m pytest tests/ -v --tb=short \
             -p no:cacheprovider 2>&1 | tee pytest-output.txt

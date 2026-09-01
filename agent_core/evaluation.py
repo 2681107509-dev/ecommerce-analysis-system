@@ -53,6 +53,7 @@ def evaluate_routing(cases: list[EvaluationCase]) -> dict[str, Any]:
     rows = []
     by_category: Counter[str] = Counter()
     correct_by_category: Counter[str] = Counter()
+    expected_intents: Counter[AgentIntent] = Counter(case.expected_intent for case in cases)
     for case in cases:
         actual = classify_intent(case.query)
         passed = actual == case.expected_intent
@@ -66,10 +67,18 @@ def evaluate_routing(cases: list[EvaluationCase]) -> dict[str, Any]:
         category: round(correct_by_category[category] / total * 100, 2)
         for category, total in sorted(by_category.items())
     }
+    majority_intent, majority_count = expected_intents.most_common(1)[0]
+    majority_accuracy = round(majority_count / len(rows) * 100, 2)
+    accuracy = round(passed_count / len(rows) * 100, 2)
     return {
         "total": len(rows),
         "passed": passed_count,
-        "accuracy_pct": round(passed_count / len(rows) * 100, 2),
+        "accuracy_pct": accuracy,
+        "majority_baseline": {
+            "intent": majority_intent,
+            "accuracy_pct": majority_accuracy,
+        },
+        "lift_over_majority_pct_points": round(accuracy - majority_accuracy, 2),
         "category_accuracy_pct": category_scores,
         "failures": [row for row in rows if not row["passed"]],
     }

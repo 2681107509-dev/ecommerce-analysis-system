@@ -33,6 +33,7 @@ from agent_core.db_schema import describe_table
 from agent_core.model_adapter import OpenAIModelAdapter
 from agent_core.models import AgentSource
 from agent_core.session import MemoryConversationStore
+from agent_core.sql_safety import dialect_from_url
 from backend.utils.sql_guard import (
     ensure_read_only_sql,
     guard_read_only_engine,
@@ -338,6 +339,8 @@ def get_session_runtime(_engine, _retriever):
         answer_generator=model_adapter.answer,
         conversations=MemoryConversationStore(ttl_seconds=1800, max_sessions=1, max_turns=6),
         sql_timeout_seconds=10,
+        # get_db_uri() 在无 MySQL 环境会回落到 SQLite，方言必须按实际连接串判断。
+        sql_dialect=dialect_from_url(get_db_uri()),
     )
     st.session_state.runtime_instance = runtime
     st.session_state.runtime_fingerprint = fingerprint

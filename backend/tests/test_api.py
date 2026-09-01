@@ -233,7 +233,11 @@ class TestAI:
         assert data["intent"] == "blocked"
         assert data["thread_id"] == "security-test"
         assert data["request_id"]
-        assert [step["name"] for step in data["steps"]] == ["route", "safe_response"]
+        # 拦截路径的完整轨迹：finalize 只做指标归集，不写入 steps。
+        step_names = [step["name"] for step in data["steps"]]
+        assert step_names == ["input_safety", "load_history", "route", "safe_response", "save_session"]
+        # 安全属性（不随节点增删而失效）：绝不能触达模型生成或数据库执行节点。
+        assert not {"generate_sql", "validate_sql", "execute_sql", "load_schema"} & set(step_names)
 
 
 class TestExport:

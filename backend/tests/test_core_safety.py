@@ -25,6 +25,7 @@ from backend.utils.sql_guard import is_read_only_sql
     "WITH totals AS (SELECT 1 AS n) SELECT n FROM totals",
     "SHOW TABLES",
     "DESCRIBE orders",
+    "SELECT /*+ MAX_EXECUTION_TIME(10000) */ SUM(payment_amount) FROM orders LIMIT 500",
     "SELECT ';' AS value",
     "SELECT '-- not a comment' AS value",
 ])
