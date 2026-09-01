@@ -3,6 +3,8 @@ uvicorn[standard]==0.49.0
 sqlalchemy[asyncio]==2.0.51
 aiomysql==0.3.2
 pymysql==1.2.0
+# MySQL 8 caching_sha2_password / sha256_password 认证所需；不依赖 JWT 库间接安装。
+cryptography==50.0.1
 pydantic==2.13.4
 pydantic-settings==2.14.2
 pandas==3.0.3
