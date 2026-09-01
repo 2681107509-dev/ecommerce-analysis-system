@@ -4,7 +4,7 @@ services:
     container_name: ea-mysql
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-${DB_PASSWORD:?请在根目录 .env 中设置 DB_ROOT_PASSWORD}}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?请在根目录 .env 中设置 DB_ROOT_PASSWORD}
       MYSQL_DATABASE: ${DB_NAME:-ai_commerce_intelligence_platform}
       MYSQL_CHARSET: utf8mb4
       MYSQL_COLLATION: utf8mb4_unicode_ci
@@ -18,7 +18,7 @@ services:
       # 单文件只读挂载会导致容器启动失败。
       - ./data/cleaned_orders.csv:/var/lib/mysql-files/cleaned_orders.csv
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_ROOT_PASSWORD:-${DB_PASSWORD}}"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_ROOT_PASSWORD:?请设置 DB_ROOT_PASSWORD}"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -31,11 +31,11 @@ services:
     container_name: ea-db-bootstrap
     restart: "no"
     environment:
-      MYSQL_PWD: ${DB_ROOT_PASSWORD:-${DB_PASSWORD:?请在根目录 .env 中设置 DB_ROOT_PASSWORD}}
+      MYSQL_PWD: ${DB_ROOT_PASSWORD:?请在根目录 .env 中设置 DB_ROOT_PASSWORD}
       DB_NAME: ${DB_NAME:-ai_commerce_intelligence_platform}
-      DB_APP_PASSWORD: ${DB_APP_PASSWORD:-${DB_PASSWORD:?请设置 DB_APP_PASSWORD}}
-      DB_AI_PASSWORD: ${DB_AI_PASSWORD:-${DB_PASSWORD:?请设置 DB_AI_PASSWORD}}
-      DB_SYNC_PASSWORD: ${DB_SYNC_PASSWORD:-${DB_PASSWORD:?请设置 DB_SYNC_PASSWORD}}
+      DB_APP_PASSWORD: ${DB_APP_PASSWORD:?请设置 DB_APP_PASSWORD}
+      DB_AI_PASSWORD: ${DB_AI_PASSWORD:?请设置 DB_AI_PASSWORD}
+      DB_SYNC_PASSWORD: ${DB_SYNC_PASSWORD:?请设置 DB_SYNC_PASSWORD}
     volumes:
       - ./deploy/mysql/bootstrap-users.sh:/bootstrap-users.sh:ro
     entrypoint: ["sh", "/bootstrap-users.sh"]
@@ -73,9 +73,9 @@ services:
       DB_HOST: mysql
       DB_PORT: 3306
       DB_USER: ea_app
-      DB_PASSWORD: ${DB_APP_PASSWORD:-${DB_PASSWORD:?请设置 DB_APP_PASSWORD}}
+      DB_PASSWORD: ${DB_APP_PASSWORD:?请设置 DB_APP_PASSWORD}
       DB_SYNC_USER: ea_sync
-      DB_SYNC_PASSWORD: ${DB_SYNC_PASSWORD:-${DB_PASSWORD:?请设置 DB_SYNC_PASSWORD}}
+      DB_SYNC_PASSWORD: ${DB_SYNC_PASSWORD:?请设置 DB_SYNC_PASSWORD}
       DB_NAME: ${DB_NAME:-ai_commerce_intelligence_platform}
       REDIS_HOST: redis
       REDIS_PORT: 6379
@@ -95,7 +95,7 @@ services:
       RAG_STATS_PATH: /app/ai-ecommerce-assistant/data/rag_stats.json
       DEBUG: ${DEBUG:-false}
       AI_DB_USER: ${AI_DB_USER:-ea_ai}
-      AI_DB_PASSWORD: ${AI_DB_PASSWORD:-${DB_AI_PASSWORD:-${DB_PASSWORD:?请设置 DB_AI_PASSWORD}}}
+      AI_DB_PASSWORD: ${DB_AI_PASSWORD:?请设置 DB_AI_PASSWORD}
     volumes:
       - chroma_data:/app/ai-ecommerce-assistant/data:ro
     expose:
@@ -152,7 +152,7 @@ services:
       DB_HOST: mysql
       DB_PORT: 3306
       DB_USER: ea_ai
-      DB_PASSWORD: ${DB_AI_PASSWORD:-${DB_PASSWORD:?请设置 DB_AI_PASSWORD}}
+      DB_PASSWORD: ${DB_AI_PASSWORD:?请设置 DB_AI_PASSWORD}
       DB_NAME: ${DB_NAME:-ai_commerce_intelligence_platform}
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_BASE_URL: ${LLM_BASE_URL:-https://api.deepseek.com}
