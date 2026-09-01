@@ -3,7 +3,8 @@ import secrets
 from datetime import UTC, datetime, timedelta
 
 import bcrypt
-from jose import JWTError, jwt
+import jwt
+from jwt import PyJWTError
 from pydantic import BaseModel
 
 from backend.config import get_settings
@@ -55,13 +56,18 @@ def create_access_token(username: str, expires_delta: timedelta | None = None) -
 
 def decode_token(token: str) -> TokenData | None:
     try:
-        payload = jwt.decode(token, settings.jwt_secret, algorithms=[ALGORITHM])
+        payload = jwt.decode(
+            token,
+            settings.jwt_secret,
+            algorithms=[ALGORITHM],
+            options={"require": ["sub", "exp", "iat"]},
+        )
         username: str = payload.get("sub")
         exp: int = payload.get("exp")
         if username is None:
             return None
         return TokenData(username=username, exp=exp)
-    except JWTError:
+    except (PyJWTError, TypeError, ValueError):
         return None
 
 

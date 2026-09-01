@@ -15,8 +15,10 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 from types import SimpleNamespace
 
+import jwt
 import pytest
 
 from backend.config import Settings
@@ -30,6 +32,26 @@ from backend.services.rfm_service import (
 from backend.utils import cache
 from backend.utils.rate_limiter import _get_client_id
 from backend.utils.sql_guard import is_read_only_sql
+
+
+class TestJwtValidation:
+    def test_round_trip(self):
+        from backend.utils.auth import create_access_token, decode_token
+
+        token = create_access_token("auditor")
+        assert decode_token(token).username == "auditor"
+
+    def test_expired_token_is_rejected(self):
+        from backend.utils.auth import create_access_token, decode_token
+
+        token = create_access_token("auditor", expires_delta=timedelta(seconds=-1))
+        assert decode_token(token) is None
+
+    def test_token_without_required_claims_is_rejected(self):
+        from backend.utils.auth import ALGORITHM, decode_token, settings
+
+        token = jwt.encode({"sub": "auditor"}, settings.jwt_secret, algorithm=ALGORITHM)
+        assert decode_token(token) is None
 
 # ─── 安全#5：CSV 公式注入防护 ───────────────────────────
 

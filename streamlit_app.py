@@ -176,7 +176,7 @@ if page == "📊 销售总览":
     st.plotly_chart(fig_user, width='stretch')
 
     st.markdown("---")
-    st.caption(f"数据更新时间：{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} | 数据来源：cleaned_orders | AI Commerce Intelligence Platform v1.0.0")
+    st.caption(f"数据更新时间：{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} | 数据来源：cleaned_orders | AI Commerce Intelligence Platform v1.0.3")
 
 # ══════════════════════════════════════════════════════════════
 # 企业级RFM分层分析
@@ -697,11 +697,14 @@ elif page == "👥 RFM 客户分层":
                 fig_trend.update_layout(
                     **_PLOTLY_LAYOUT_DEFAULTS,
                     title=f"{sel_segment} 月度趋势",
-                    yaxis={"title": "GMV (元)", "side": "left"},
-                    yaxis2={"title": "活跃人数", "overlaying": "y", "side": "right", "showgrid": False},
                     legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "center", "x": 0.5},
                     margin={"t": 60, "b": 40, "l": 60, "r": 60},
                     height=350,
+                )
+                # 默认布局已包含 yaxis；轴配置分次更新，避免关键字重复。
+                fig_trend.update_layout(
+                    yaxis={"title": "GMV (元)", "side": "left"},
+                    yaxis2={"title": "活跃人数", "overlaying": "y", "side": "right", "showgrid": False},
                 )
                 st.plotly_chart(fig_trend, width='stretch')
 

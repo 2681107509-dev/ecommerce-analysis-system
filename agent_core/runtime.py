@@ -18,7 +18,7 @@ from agent_core.sql_safety import (
     apply_execution_guard,
     validate_and_limit_sql,
 )
-from agent_core.workflow import classify_intent
+from agent_core.routing import classify_intent
 
 Retriever = Callable[[str], Awaitable[list[AgentSource]]]
 SchemaLoader = Callable[[], Awaitable[str]]

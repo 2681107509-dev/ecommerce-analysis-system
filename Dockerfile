@@ -3,7 +3,7 @@ FROM python:3.12-slim
 WORKDIR /app
 
 COPY backend/requirements.txt ./backend/
-RUN python -m pip install --no-cache-dir --upgrade "pip>=26.1.2" \
+RUN python -m pip install --no-cache-dir --upgrade "pip>=26.1.2" "setuptools>=83.0.0" \
     && pip install --no-cache-dir -r ./backend/requirements.txt
 
 COPY backend/ ./backend/
