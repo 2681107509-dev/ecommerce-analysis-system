@@ -312,6 +312,7 @@ rag_tool_call_total 18
 | Workflow | 触发 | 职责 |
 |----------|------|------|
 | `.github/workflows/ci.yml` | PR / push main | AI 助手 107 项测试（Python 3.12 + 3.13）+ 后端 118 项测试（MySQL 8）+ Ruff + 编译 + 离线 Agent 评测 |
+| `.github/workflows/docker-smoke.yml` | PR / push main | 空卷构建全栈、断言 102,287 行、验证 7 个入口与 WebSocket 握手 |
 | `.github/workflows/release.yml` | push main / tag `v*.*.*` / 手动 | 构建 backend / streamlit / ai-assistant 三个 Docker 镜像，**多架构**（linux/amd64 + linux/arm64），推送到 `ghcr.io/super-zxq/ai-commerce-intelligence-platform-{backend,streamlit,ai-assistant}` |
 
 **Tag 策略**（由 `docker/metadata-action` 自动管理）：
@@ -319,7 +320,7 @@ rag_tool_call_total 18
 | 触发 | tag 示例 |
 |------|----------|
 | push main | `:latest`、`:main-<short-sha>` |
-| push tag `v1.7.0` | `:v1.7.0`、`:v1.7`、`:latest` |
+| push tag `v1.0.0` | `:v1.0.0`、`:v1.0`、`:latest` |
 | pull request | `:pr-123`（不推送） |
 | workflow_dispatch | `:latest`、`:main-<short-sha>` |
 
@@ -328,7 +329,7 @@ rag_tool_call_total 18
 ```yaml
 services:
   backend:
-    image: ghcr.io/super-zxq/ai-commerce-intelligence-platform-backend:v1.7.0
+    image: ghcr.io/super-zxq/ai-commerce-intelligence-platform-backend:v1.0.0
     # ... 其余配置不变
 ```
 
@@ -400,8 +401,8 @@ git commit -m "feat: xxxxx"
 git push origin main
 
 # 3. CI 通过后打 tag（触发镜像构建 + 推送 ghcr.io）
-git tag v1.7.1
-git push origin v1.7.1
+git tag v1.0.1
+git push origin v1.0.1
 
 # 4. 生产拉新镜像
 docker compose pull && docker compose up -d
@@ -539,6 +540,7 @@ ai-commerce-intelligence-platform/
 │   └── requirements.txt
 ├── .github/workflows/            # GitHub Actions CI/CD
 │   ├── ci.yml                    # 测试流水线（PR 触发）
+│   ├── docker-smoke.yml          # 空卷 Compose 冷启动验收
 │   └── release.yml               # Docker 镜像构建（push main / tag 触发）
 ├── scripts/
 │   └── health_check.py           # 全栈健康检查脚本（本地 + CI）

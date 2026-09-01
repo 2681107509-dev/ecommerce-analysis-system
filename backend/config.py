@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "AI Commerce Intelligence Platform"
-    app_version: str = "1.7.0"
+    app_version: str = "1.0.0"
     debug: bool = False
 
     db_host: str = "localhost"

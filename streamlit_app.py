@@ -176,7 +176,7 @@ if page == "📊 销售总览":
     st.plotly_chart(fig_user, width='stretch')
 
     st.markdown("---")
-    st.caption(f"数据更新时间：{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} | 数据来源：cleaned_orders | AI Commerce Intelligence Platform v1.7.0")
+    st.caption(f"数据更新时间：{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} | 数据来源：cleaned_orders | AI Commerce Intelligence Platform v1.0.0")
 
 # ══════════════════════════════════════════════════════════════
 # 企业级RFM分层分析
