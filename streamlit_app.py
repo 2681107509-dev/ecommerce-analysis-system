@@ -1,23 +1,26 @@
 # 企业级RFM分层页面 v3.0 | 符合CDP数据产品规范
-import streamlit as st
+import os
+from datetime import UTC, datetime
+
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from datetime import datetime
-import os
-import numpy as np
+import streamlit as st
 
 from backend.utils.rfm_scoring import assign_segment, quantile_scores
 
 # ══════════════════════════════════════════════════════════════
 # 全局样式
 # ══════════════════════════════════════════════════════════════
-_PLOTLY_LAYOUT_DEFAULTS = dict(
-    template="plotly_dark",
-    font=dict(family="Microsoft YaHei, PingFang SC, sans-serif", size=13, color='#e2e8f0'),
-    paper_bgcolor="rgba(0,0,0,0)",
-    plot_bgcolor='rgba(15,23,42,0.4)',
-)
+_PLOTLY_LAYOUT_DEFAULTS = {
+    "template": "plotly_white",
+    "font": {"family": "Microsoft YaHei, PingFang SC, sans-serif", "size": 13, "color": '#334155'},
+    "paper_bgcolor": "rgba(0,0,0,0)",
+    "plot_bgcolor": '#FFFFFF',
+    "xaxis": {"gridcolor": "#E2E8F0", "zerolinecolor": "#CBD5E1"},
+    "yaxis": {"gridcolor": "#E2E8F0", "zerolinecolor": "#CBD5E1"},
+}
 
 # 企业标准色
 ENTERPRISE_COLORS = {
@@ -49,6 +52,26 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+st.markdown("""
+<style>
+    :root { --brand: #1565C0; --ink: #0F172A; --muted: #64748B; --surface: #FFFFFF; }
+    .stApp { background: #F6F8FC; color: var(--ink); }
+    .block-container { max-width: 1440px; padding-top: 2rem; padding-bottom: 3rem; }
+    [data-testid="stHeader"] { background: rgba(246, 248, 252, .8); }
+    [data-testid="stSidebar"] { background: #EEF2F7; border-right: 1px solid #E2E8F0; color: var(--ink); }
+    [data-testid="stMetric"] {
+        background: var(--surface); border: 1px solid #E2E8F0; border-radius: 14px;
+        padding: 1rem 1.1rem; box-shadow: 0 5px 18px rgba(15, 23, 42, .04);
+    }
+    [data-testid="stMetricLabel"] p { color: var(--muted); }
+    [data-testid="stMetricValue"] { color: var(--ink); }
+    h1, h2, h3 { color: var(--ink); letter-spacing: -.02em; }
+    div[data-testid="stAlert"] { border-radius: 12px; }
+    .stTabs [data-baseweb="tab-list"] { gap: 1.25rem; border-bottom: 1px solid #E2E8F0; }
+    .stTabs [aria-selected="true"] { color: var(--brand); }
+</style>
+""", unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════
 # 数据加载
@@ -125,7 +148,7 @@ if page == "📊 销售总览":
         daily_sales = filtered_df.groupby(filtered_df['下单时间'].dt.date)['付款金额'].sum().reset_index()
         daily_sales.columns = ['日期', '销售额']
         fig_line = px.line(daily_sales, x='日期', y='销售额', markers=True, title="每日销售额变化趋势")
-        fig_line.update_traces(line=dict(width=3, color='#1f77b4'), marker=dict(size=6))
+        fig_line.update_traces(line={"width": 3, "color": '#1f77b4'}, marker={"size": 6})
         fig_line.update_layout(**_PLOTLY_LAYOUT_DEFAULTS, hovermode='x unified')
         st.plotly_chart(fig_line, width='stretch')
 
@@ -139,6 +162,7 @@ if page == "📊 销售总览":
     st.subheader("🏆 商品销售额 TOP10")
     top_products = filtered_df.groupby('商品编号')['付款金额'].sum().nlargest(10).reset_index()
     fig_bar = px.bar(top_products, x='商品编号', y='付款金额', title="销售额 TOP10 商品", color='付款金额', color_continuous_scale='Reds')
+    fig_bar.update_layout(**_PLOTLY_LAYOUT_DEFAULTS)
     fig_bar.update_layout(xaxis_title="商品编号", yaxis_title="销售额 (元)")
     fig_bar.update_traces(texttemplate='%{y:.0f}', textposition='outside')
     st.plotly_chart(fig_bar, width='stretch')
@@ -146,12 +170,13 @@ if page == "📊 销售总览":
     st.subheader("👑 用户消费 TOP10")
     top_users = filtered_df.groupby('用户名')['付款金额'].sum().nlargest(10).reset_index()
     fig_user = px.bar(top_users, x='付款金额', y='用户名', orientation='h', title="消费金额 TOP10 用户", color='付款金额', color_continuous_scale='Viridis')
+    fig_user.update_layout(**_PLOTLY_LAYOUT_DEFAULTS)
     fig_user.update_layout(xaxis_title="消费金额 (元)", yaxis_title="用户")
     fig_user.update_traces(texttemplate='%{x:.0f}', textposition='outside')
     st.plotly_chart(fig_user, width='stretch')
 
     st.markdown("---")
-    st.caption(f"数据更新时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | 数据来源：cleaned_orders | AI Commerce Intelligence Platform v1.7.0")
+    st.caption(f"数据更新时间：{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} | 数据来源：cleaned_orders | AI Commerce Intelligence Platform v1.0.0")
 
 # ══════════════════════════════════════════════════════════════
 # 企业级RFM分层分析
@@ -347,9 +372,9 @@ elif page == "👥 RFM 客户分层":
                 values=ring_data['人数'].tolist(),
                 labels=ring_data['分组'].tolist(),
                 hole=0.55,
-                marker=dict(colors=ring_colors, line=dict(color='white', width=2)),
+                marker={"colors": ring_colors, "line": {"color": 'white', "width": 2}},
                 textinfo='percent+label',
-                textfont=dict(size=13, color='#334155'),
+                textfont={"size": 13, "color": '#334155'},
                 textposition='outside',
                 pull=[0.05 if i == ring_data['人数'].idxmax() else 0 for i in range(len(ring_data))],
                 hovertemplate='<b>%{label}</b><br>人数: %{value:,}<br>占比: %{percent}<extra></extra>',
@@ -357,7 +382,7 @@ elif page == "👥 RFM 客户分层":
             )])
             fig_ring.add_annotation(
                 text=f"<b>{total_users:,}</b><br>客户总数",
-                x=0.5, y=0.5, font=dict(size=18, family="Microsoft YaHei", color='#1e293b', weight='bold'),
+                x=0.5, y=0.5, font={"size": 18, "family": "Microsoft YaHei", "color": '#1e293b', "weight": 'bold'},
                 showarrow=False
             )
             fig_ring.update_layout(
@@ -365,7 +390,7 @@ elif page == "👥 RFM 客户分层":
                 showlegend=False,
                 uniformtext_minsize=10,
                 uniformtext_mode='hide',
-                margin=dict(t=30, b=60, l=20, r=20),
+                margin={"t": 30, "b": 60, "l": 20, "r": 20},
                 height=400,
             )
             st.plotly_chart(fig_ring, width='stretch')
@@ -481,11 +506,11 @@ elif page == "👥 RFM 客户分层":
             for i, r_val in enumerate(fm_pivot.index):
                 for j, c_val in enumerate(fm_pivot.columns):
                     if z_display[i, j] == 0:
-                        text_annotations.append(dict(
-                            x=f'F={c_val}', y=f'M={r_val}',
-                            text='—', showarrow=False,
-                            font=dict(size=14, color='#475569'),
-                        ))
+                        text_annotations.append({
+                            "x": f'F={c_val}', "y": f'M={r_val}',
+                            "text": '—', "showarrow": False,
+                            "font": {"size": 14, "color": '#475569'},
+                        })
 
             fig_matrix.add_trace(go.Heatmap(
                 z=z_display,
@@ -493,7 +518,7 @@ elif page == "👥 RFM 客户分层":
                 y=[f'M={r}' for r in fm_pivot.index],
                 colorscale=[[0, '#1e293b'], [0.01, '#334155'], [0.5, '#fbbf24'], [1, '#dc2626']],
                 zmin=0, zmax=max(1, fm_pivot.values.max()),
-                colorbar=dict(title="客户规模", len=0.45, y=0.5, thickness=15),
+                colorbar={"title": "客户规模", "len": 0.45, "y": 0.5, "thickness": 15},
                 hovertemplate='F=%{x}, M=%{y}<br>客户数: %{z:,.0f}<extra></extra>',
                 showscale=True,
                 xgap=3, ygap=3,
@@ -521,12 +546,12 @@ elif page == "👥 RFM 客户分层":
                     x=['F=' + str(int(f)) for f in bubble['f_score']],
                     y=['M=' + str(int(m)) for m in bubble['m_score']],
                     mode='markers',
-                    marker=dict(
-                        size=bubble['气泡大小'].values,
-                        color=bubble['颜色'].values,
-                        opacity=0.7,
-                        line=dict(width=1, color='white'),
-                    ),
+                    marker={
+                        "size": bubble['气泡大小'].values,
+                        "color": bubble['颜色'].values,
+                        "opacity": 0.7,
+                        "line": {"width": 1, "color": 'white'},
+                    },
                     hovertext=bubble['hover'],
                     hoverinfo='text',
                     showlegend=False,
@@ -538,13 +563,7 @@ elif page == "👥 RFM 客户分层":
                     seg = row['主要分层']
                     # 仅在符合分层条件的格子标注
                     should_label = False
-                    if seg == "重要保持客户" and f_v < f_threshold and m_v >= m_threshold:
-                        should_label = True
-                    elif seg == "重要挽留客户" and f_v < f_threshold and m_v < m_threshold:
-                        should_label = True
-                    elif seg == "一般保持客户" and m_v >= m_threshold:
-                        should_label = True
-                    elif seg == "一般挽留客户" and f_v < f_threshold and m_v < m_threshold:
+                    if seg == "重要保持客户" and f_v < f_threshold and m_v >= m_threshold or seg == "重要挽留客户" and f_v < f_threshold and m_v < m_threshold or seg == "一般保持客户" and m_v >= m_threshold or seg == "一般挽留客户" and f_v < f_threshold and m_v < m_threshold:
                         should_label = True
 
                     if should_label and int(row['客户数']) > 0:
@@ -553,7 +572,7 @@ elif page == "👥 RFM 客户分层":
                             x=f'F={f_v}', y=f'M={m_v}',
                             text=f"<b>{short_name}</b>",
                             showarrow=False,
-                            font=dict(size=10, color="white", family="Microsoft YaHei"),
+                            font={"size": 10, "color": "white", "family": "Microsoft YaHei"},
                             bgcolor=_hex_to_rgba(ENTERPRISE_COLORS_FULL.get(seg, "#999"), 0.8),
                             borderpad=2,
                         )
@@ -562,7 +581,7 @@ elif page == "👥 RFM 客户分层":
                 **_PLOTLY_LAYOUT_DEFAULTS,
                 xaxis_title="Frequency 评分（越高=消费越频繁）",
                 yaxis_title="Monetary 评分（越高=消费金额越大）",
-                margin=dict(t=40, b=50, l=60, r=60),
+                margin={"t": 40, "b": 50, "l": 60, "r": 60},
                 height=480,
             )
             st.plotly_chart(fig_matrix, width='stretch')
@@ -591,24 +610,24 @@ elif page == "👥 RFM 客户分层":
             fig_r_stack.add_vline(
                 x=r_threshold - 0.5, line_dash="dash", line_color="#1E88E5", line_width=2,
                 annotation_text=f"← 高价值（R≤{r_threshold}）", annotation_position="top left",
-                annotation=dict(font=dict(size=11, color="#1E88E5"))
+                annotation={"font": {"size": 11, "color": "#1E88E5"}}
             )
             fig_r_stack.add_vline(
                 x=r_threshold + 0.5, line_dash="dash", line_color="#FF5722", line_width=2,
                 annotation_text=f"流失预警（R>{r_threshold}）→", annotation_position="top right",
-                annotation=dict(font=dict(size=11, color="#FF5722"))
+                annotation={"font": {"size": 11, "color": "#FF5722"}}
             )
             fig_r_stack.update_layout(
                 **_PLOTLY_LAYOUT_DEFAULTS,
                 xaxis_title="R 评分（越小=越近期消费）",
                 yaxis_title="客户数量",
-                legend=dict(
-                    orientation="h", yanchor="bottom",
-                    y=-0.32, xanchor="center", x=0.5,
-                    font=dict(size=9),
-                    tracegroupgap=5,
-                ),
-                margin=dict(t=40, b=100, l=50, r=20),
+                legend={
+                    "orientation": "h", "yanchor": "bottom",
+                    "y": -0.32, "xanchor": "center", "x": 0.5,
+                    "font": {"size": 9},
+                    "tracegroupgap": 5,
+                },
+                margin={"t": 40, "b": 100, "l": 50, "r": 20},
                 bargap=0.15,
                 height=380,
             )
@@ -672,16 +691,16 @@ elif page == "👥 RFM 客户分层":
                 fig_trend.add_trace(go.Scatter(
                     x=monthly['月份'], y=monthly['活跃人数'],
                     name='活跃人数', mode='lines+markers',
-                    line=dict(color='#FF5722', width=2),
+                    line={"color": '#FF5722', "width": 2},
                     yaxis='y2',
                 ))
                 fig_trend.update_layout(
                     **_PLOTLY_LAYOUT_DEFAULTS,
                     title=f"{sel_segment} 月度趋势",
-                    yaxis=dict(title="GMV (元)", side="left"),
-                    yaxis2=dict(title="活跃人数", overlaying="y", side="right", showgrid=False),
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
-                    margin=dict(t=60, b=40, l=60, r=60),
+                    yaxis={"title": "GMV (元)", "side": "left"},
+                    yaxis2={"title": "活跃人数", "overlaying": "y", "side": "right", "showgrid": False},
+                    legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "center", "x": 0.5},
+                    margin={"t": 60, "b": 40, "l": 60, "r": 60},
                     height=350,
                 )
                 st.plotly_chart(fig_trend, width='stretch')
@@ -767,4 +786,4 @@ elif page == "👥 RFM 客户分层":
             )
 
     st.markdown("---")
-    st.caption(f"数据更新时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | 企业级RFM分层页面 v3.0 | AI Commerce Intelligence Platform")
+    st.caption(f"数据更新时间：{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} | 企业级RFM分层页面 v3.0 | AI Commerce Intelligence Platform")

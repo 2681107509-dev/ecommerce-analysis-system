@@ -7,8 +7,12 @@ RUN python -m pip install --no-cache-dir --upgrade "pip>=26.1.2" \
     && pip install --no-cache-dir -r ./backend/requirements.txt
 
 COPY backend/ ./backend/
+COPY agent_core/ ./agent_core/
+COPY ai-ecommerce-assistant/knowledge_base/ ./ai-ecommerce-assistant/knowledge_base/
 COPY data/ /app/data/
 COPY sql/ /app/sql/
+
+RUN python -c "import agent_core"
 
 EXPOSE 8000
 

@@ -159,15 +159,20 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: 安装 Ruff（版本与 backend/requirements-dev.txt 锁定一致，避免新版本默认规则集变动导致误报）
-        run: python -m pip install ruff==0.15.17
+      - name: 安装 Ruff（从 backend/requirements-dev.txt 读取锁定的版本，避免与开发环境漂移）
+        run: |
+          python -m pip install -r backend/requirements-dev.txt
+          ruff --version
 
       - name: 静态检查
-        run: ruff check backend ai-ecommerce-assistant streamlit_app.py scripts
+        run: ruff check agent_core backend ai-ecommerce-assistant streamlit_app.py scripts
+
+      - name: Agent 离线路由评测
+        run: python -m agent_core.evaluation
 
       - name: 编译检查所有 .py 文件
         run: |
           # compileall 会自动跳过 __pycache__ / 没有 .py 的目录
-          python -m compileall -q backend ai-ecommerce-assistant streamlit_app.py \
+          python -m compileall -q agent_core backend ai-ecommerce-assistant streamlit_app.py scripts \
             || (echo "❌ 语法错误"; exit 1)
           echo "✅ 所有 Python 文件语法 OK"

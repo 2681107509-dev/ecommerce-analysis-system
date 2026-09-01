@@ -1,0 +1,98 @@
+name: Docker Compose Smoke
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: docker-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cold-start:
+    name: 空卷全栈冷启动
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 写入仅用于 CI 的 Compose 配置
+        run: |
+          cat > .env <<'EOF'
+          DB_ROOT_PASSWORD=ci-root-password
+          DB_APP_PASSWORD=ci-app-password
+          DB_AI_PASSWORD=ci-ai-password
+          DB_SYNC_PASSWORD=ci-sync-password
+          DB_NAME=ai_commerce_intelligence_platform
+          REDIS_PASSWORD=
+          NGINX_PORT=80
+          JWT_SECRET=ci-docker-secret-not-for-production
+          ADMIN_USERNAME=admin
+          ADMIN_PASSWORD=admin123
+          ANALYST_USERNAME=analyst
+          ANALYST_PASSWORD=analyst123
+          DEBUG=true
+          LLM_API_KEY=
+          LLM_BASE_URL=https://api.deepseek.com
+          LLM_MODEL=deepseek-chat
+          EOF
+          docker compose config --quiet
+
+      - name: 从空卷构建并启动全栈
+        run: |
+          docker compose down -v --remove-orphans
+          docker compose up -d --build
+
+      - name: 等待统一入口就绪
+        run: |
+          for i in {1..90}; do
+            if curl --fail --silent --max-time 5 http://localhost/nginx-health >/dev/null; then
+              echo "全栈已就绪"
+              exit 0
+            fi
+            echo "等待全栈启动（$i/90）..."
+            sleep 10
+          done
+          docker compose ps
+          docker compose logs --tail=200
+          exit 1
+
+      - name: 验证数据、主要入口与 WebSocket
+        run: |
+          row_count="$(docker compose exec -T mysql mysql \
+            -uroot -pci-root-password -Nse \
+            'SELECT COUNT(*) FROM ai_commerce_intelligence_platform.orders')"
+          test "$row_count" = "102287"
+          echo "订单数据行数：$row_count"
+
+          for path in / /BI/ /ai/ /docs /demo /monitor /health-panel; do
+            status="$(curl --location --silent --output /dev/null \
+              --write-out '%{http_code}' --max-time 20 "http://localhost${path}")"
+            echo "$path -> $status"
+            test "$status" = "200"
+          done
+
+          ws_status="$(curl --http1.1 --silent --output /dev/null \
+            --write-out '%{http_code}' --max-time 3 \
+            --header 'Connection: Upgrade' \
+            --header 'Upgrade: websocket' \
+            --header 'Origin: http://localhost' \
+            --header 'Sec-WebSocket-Version: 13' \
+            --header 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
+            --header 'Sec-WebSocket-Protocol: streamlit' \
+            http://localhost/BI/_stcore/stream || true)"
+          echo "WebSocket handshake -> $ws_status"
+          test "$ws_status" = "101"
+
+      - name: 输出失败诊断
+        if: failure()
+        run: |
+          docker compose ps || true
+          docker compose logs --tail=300 || true
+
+      - name: 清理容器与卷
+        if: always()
+        run: docker compose down -v --remove-orphans || true

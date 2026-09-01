@@ -7,25 +7,24 @@
 
 ## 简介
 
-基于 **10 万+ 条电商真实订单数据**，完成从数据清洗、特征工程到多维分析与可视化的完整链路。系统采用前后端分离架构，提供交互式 BI 看板、AI 智能查询（含 RAG 业务知识检索增强）、RESTful API 服务、RFM 用户画像和实时监控五大核心能力。
+基于 **102,287 条公开电商订单样本**，完成从数据清洗、特征工程到多维分析与可视化的完整链路。系统采用前后端分离架构，提供交互式 BI 看板、分节点 Agent 智能查询、RAG 业务知识检索、RESTful API、RFM 用户画像和实时监控。
 
 ## 功能概览
 
 | 模块 | 技术栈 | 功能 |
 |------|--------|------|
 | **BI 数据看板** | Streamlit + Plotly | 交互式数据大屏，多维度交叉筛选 |
-| **AI 分析助手 + RAG** | LangChain + DeepSeek + Chroma + BGE | 自然语言提问，融合业务知识库与 SQL 数据查询，引用来源透明 |
+| **AI 分析助手 + RAG** | LangGraph + LangChain + SQLGlot + Chroma | 分节点路由、结构化 Text-to-SQL、一次纠错、多轮会话、引用与公开轨迹 |
 | **FastAPI 后端** | FastAPI + SQLAlchemy | 32 个 API 操作，含认证/限流/缓存/监控/RFM |
 | **RFM 用户画像** | SQLAlchemy + 量化分群 | R/F/M 五分位评分 → 8 类用户分群 + 流失预警 |
 | **数据分析 Notebook** | Jupyter + Pandas | 数据清洗、销售/时间/用户多维分析 |
 | **RAG 业务知识库** | Chroma + BGE-small-zh-v1.5 | 6 份业务文档（术语/数据字典/KPI/规则/API/黄金查询）向量检索 |
-| **测试 & 评估** | pytest + 自研评估器 | 107 个 RAG 单元测试 + 20 条 gold_qa 评估集 |
+| **测试 & 评估** | pytest + 离线评估器 | 225 项自动化测试 + 100 条路由评测 + 15 条 RAG 检索评测 |
 
 ## 在线演示
 
 | 应用 | 链接 | 说明 |
 |------|------|------|
-| **BI 数据看板** | [Streamlit Cloud](https://streamlit.io) | 在线部署 |
 | **Docker 统一入口** | `http://localhost/` | 导航页（默认入口） |
 | **BI 数据看板** | `http://localhost/BI/` | 交互式数据大屏 |
 | **AI 分析助手** | `http://localhost/ai/` | 自然语言查数 + RAG 知识库 |
@@ -33,6 +32,16 @@
 | **API 体验页** | `http://localhost/demo` | 可视化大屏 + AI 查询 |
 | **系统监控** | `http://localhost/monitor` | 实时监控面板 |
 | **健康检查** | `http://localhost/health-panel` | 组件健康状态 |
+
+## 界面预览
+
+### AI 分析助手
+
+![AI 分析助手：模型连接、RAG、对话入口](docs/screenshots/ai-assistant.png)
+
+### BI 销售看板
+
+![BI 销售看板：核心指标、趋势和平台占比](docs/screenshots/bi-dashboard.png)
 
 ## 快速开始
 
@@ -155,39 +164,33 @@ AI 分析助手内置 RAG 能力，能同时利用**业务知识库**和**SQL �
 
 ### 架构
 
+FastAPI 与 Streamlit 只负责各自的配置和展示，统一调用 `agent_core.AgentRuntime`。执行轨迹只记录节点动作、耗时和脱敏错误类型，不包含模型隐藏思维链。
+
+```text
+用户请求
+  → 输入安全检查
+  → 加载最近 6 轮会话（用户 + thread_id 隔离，TTL 30 分钟）
+  → 确定性意图路由
+      ├─ blocked       → 安全拒绝
+      ├─ clarification → 澄清问题
+      ├─ knowledge     → Top 3 RAG 检索 ──────────────┐
+      ├─ data          → Schema 读取 → SQL 生成       │
+      └─ hybrid        → RAG 检索 → Schema → SQL 生成 │
+                                      ↓              │
+                              SQLGlot AST 只读校验     │
+                                      ↓              │
+                            LIMIT 500 + 10 秒超时       │
+                                      ↓              │
+                         只读执行 → 最多一次 SQL 纠错   │
+                                      └──────┬───────┘
+                                             ↓
+                                  答案合成 + 来源引用
+                                             ↓
+                                  保存会话与公开执行轨迹
 ```
-┌────────────────────────────────────────────────────────┐
-│            Streamlit UI（:8505）                       │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  │
-│  │ Sidebar 状态  │  │  聊天主界面   │  │ 参考知识面板 │  │
-│  │ (向量库/命中率)│  │  (SQL+知识)  │  │ (来源透明)  │  │
-│  └──────────────┘  └──────────────┘  └──────────────┘  │
-└────────────────────────┬───────────────────────────────┘
-                         │ invoke({input})
-┌────────────────────────▼───────────────────────────────┐
-│  LangChain SQL Agent（ReAct）                          │
-│  ┌──────────────────┐  ┌────────────────────────────┐  │
-│  │ SQLDatabaseToolkit │ │ query_business_knowledge  │  │
-│  │  (sql_db_query等)  │ │     (RAG 工具)           │  │
-│  └──────────────────┘  └────────────┬───────────────┘  │
-│                                       │ retrieve()    │
-│                            ┌──────────▼──────────┐     │
-│                            │     Retriever       │     │
-│                            │ 缓存/超时/格式化    │     │
-│                            │ get_stats() 埋点    │     │
-│                            └──────────┬──────────┘     │
-│                                       │ search()       │
-│                            ┌──────────▼──────────┐     │
-│                            │   Chroma 向量库     │     │
-│                            │  (BGE-small-zh)    │     │
-│                            └──────────▲──────────┘     │
-│                                       │ build          │
-│                            ┌──────────┴──────────┐     │
-│                            │ knowledge_base/*.md │     │
-│                            │  6 份业务知识文档   │     │
-│                            └─────────────────────┘     │
-└────────────────────────────────────────────────────────┘
-```
+
+安全边界包括输入拦截、SQL AST 校验、SQLAlchemy 执行前拦截和数据库只读账号。SQL 仅能访问 `orders`，禁止多语句、写操作、锁表、`SLEEP`、`BENCHMARK`、`LOAD_FILE`，并自动限制最多 500 行。
+
 
 ### 知识库文档（`ai-ecommerce-assistant/knowledge_base/`）
 
@@ -215,23 +218,27 @@ python ai-ecommerce-assistant/build_knowledge_base.py --kb-dir ./my_kb
 
 切分策略：按 H2 标题切片 → 单 chunk 上限 1500 字符 → 长 section 按 H3 优先切 → 滑动窗口 200 字符重叠。生成稳定 `doc_id`（基于 source+section+content 哈希）支持增量更新。
 
-### RAG 模块组成（`ai-ecommerce-assistant/rag/`）
+### RAG 与 Agent 模块组成
 
 | 文件 | 职责 |
 |------|------|
 | `embeddings.py` | BGE-small-zh-v1.5 Embedding 工厂（多线程单例 + 设备自动检测） |
 | `vector_store.py` | Chroma 封装：增删查改、阈值过滤、元数据过滤、增量构建 |
 | `retriever.py` | LRU + TTL 缓存、超时保护、上下文格式化、统计埋点 |
-| `prompts.py` | 工具描述、决策树规则、Agent prefix 增强 |
-| `tools.py` | `build_knowledge_tool()` LangChain Tool 工厂 |
-| `extractor.py` | 从 Agent `intermediate_steps` 还原 RAG 来源（无 streamlit 依赖） |
+| `agent_core/runtime.py` | LangGraph 分节点工作流、一次纠错、超时和公开轨迹 |
+| `agent_core/model_adapter.py` | OpenAI 兼容模型、结构化 SQL 输出和 Token 元数据 |
+| `agent_core/session.py` | Redis 优先、有界内存降级的隔离会话存储 |
+| `agent_core/sql_safety.py` | SQLGlot AST 白名单与自动 LIMIT |
+| `agent_core/rag/` | 后端零外部服务 Markdown 检索基线 |
+| `ai-ecommerce-assistant/rag/` | Streamlit 的 Chroma/BGE 检索、缓存和监控兼容层 |
 | `metrics.py` | 跨进程 stats 共享：原子写入 JSON、综合 Prometheus 渲染、结构化事件日志（JSONL 可选） |
 
 ### 决策树
 
-- 用户问"X 怎么算 / 是什么 / 多少算正常" → Agent 调 `query_business_knowledge` 拿业务知识
-- 用户问"X 是多少 / 销量 / 趋势" → Agent 直接走 SQL 工具查数据
-- 不确定 → 先调知识库拿知识，再决定是否需要 SQL
+- 定义、公式、规则问题 → `knowledge`，只执行 RAG，不访问数据库
+- 数量、排名、趋势问题 → `data`，读取 Schema 后生成并执行只读 SQL
+- 同时需要口径和实际值 → `hybrid`，先 RAG、再 Schema 与 SQL
+- 模糊问题 → `clarification`；隐私、提示词注入和写库请求 → `blocked`
 
 回答时引用业务知识，**UI 自动折叠展示**"📚 参考知识"面板（来源、章节、相关度、200 字预览），不污染主回答。
 
@@ -304,7 +311,8 @@ rag_tool_call_total 18
 
 | Workflow | 触发 | 职责 |
 |----------|------|------|
-| `.github/workflows/ci.yml` | PR / push main | AI 助手 107 个测试（Python 3.12 + 3.13 矩阵）+ 后端 61 个测试（带 MySQL service container + 最小 seed）+ 语法检查 |
+| `.github/workflows/ci.yml` | PR / push main | AI 助手 107 项测试（Python 3.12 + 3.13）+ 后端 118 项测试（MySQL 8）+ Ruff + 编译 + 离线 Agent 评测 |
+| `.github/workflows/docker-smoke.yml` | PR / push main | 空卷构建全栈、断言 102,287 行、验证 7 个入口与 WebSocket 握手 |
 | `.github/workflows/release.yml` | push main / tag `v*.*.*` / 手动 | 构建 backend / streamlit / ai-assistant 三个 Docker 镜像，**多架构**（linux/amd64 + linux/arm64），推送到 `ghcr.io/super-zxq/ai-commerce-intelligence-platform-{backend,streamlit,ai-assistant}` |
 
 **Tag 策略**（由 `docker/metadata-action` 自动管理）：
@@ -312,7 +320,7 @@ rag_tool_call_total 18
 | 触发 | tag 示例 |
 |------|----------|
 | push main | `:latest`、`:main-<short-sha>` |
-| push tag `v1.7.0` | `:v1.7.0`、`:v1.7`、`:latest` |
+| push tag `v1.0.0` | `:v1.0.0`、`:v1.0`、`:latest` |
 | pull request | `:pr-123`（不推送） |
 | workflow_dispatch | `:latest`、`:main-<short-sha>` |
 
@@ -321,7 +329,7 @@ rag_tool_call_total 18
 ```yaml
 services:
   backend:
-    image: ghcr.io/super-zxq/ai-commerce-intelligence-platform-backend:v1.7.0
+    image: ghcr.io/super-zxq/ai-commerce-intelligence-platform-backend:v1.0.0
     # ... 其余配置不变
 ```
 
@@ -393,8 +401,8 @@ git commit -m "feat: xxxxx"
 git push origin main
 
 # 3. CI 通过后打 tag（触发镜像构建 + 推送 ghcr.io）
-git tag v1.7.1
-git push origin v1.7.1
+git tag v1.0.1
+git push origin v1.0.1
 
 # 4. 生产拉新镜像
 docker compose pull && docker compose up -d
@@ -402,17 +410,19 @@ docker compose pull && docker compose up -d
 
 ## 测试与评估
 
-### 单元测试（168 个用例）
+### 自动化测试（225 项）
 
 ```bash
-# 后端（61 个）
+# 后端（118 项，完整运行需要 MySQL）
 python -m pytest backend/tests/ -v
 
-# AI/RAG（107 个）
+# AI/RAG（107 项）
 python -m pytest ai-ecommerce-assistant/tests/ -v
 ```
 
 **测试覆盖：**
+- `test_agent_runtime_core.py` — 分支工具顺序、SQL AST、一次重试、用户会话隔离、Redis 降级、Token `null` 语义和 API 兼容
+- `test_agent_workflow.py` / `test_agent_evaluation.py` — 安全短路、意图路由和离线发布门槛
 - `test_rag_prompts.py` — 提示词模板（工具说明、决策树、回答模板）
 - `test_rag_tools.py` — sentinel 序列化 + Tool 工厂（空命中/异常/正常）
 - `test_rag_extractor.py` — 从 `intermediate_steps` 还原来源（多步聚合、类型防御）
@@ -429,7 +439,17 @@ AI/RAG 测试不依赖真实 BGE 模型，用 `tests/conftest.py` 里的 `FakeEm
 - Docker 镜像构建时升级到 `pip>=26.1.2`；Embedding 依赖使用 `transformers 5.x`，避开已知的 4.x checkpoint 反序列化漏洞。
 - Chroma 仅以嵌入式本地库运行，不启动或暴露 Chroma Server API。当前 Chroma 最新版存在一个仅影响远程 Server API 的未修复公告，因此不要额外对外启动 Chroma HTTP 服务。
 
-### 评估集（20 条 gold_qa）
+### 离线 Agent 评测（不调用付费模型）
+
+```bash
+python -m agent_core.evaluation
+```
+
+- 路由集 100 条：25 条基础 SQL、20 条时间/聚合/同比/排序、15 条知识、15 条混合、15 条多轮/歧义、10 条安全问题。
+- RAG 集 15 条：报告 Recall@3 与 MRR；当前确定性基线为 Recall@3 100%、MRR 0.7444。
+- 当前路由规则评测为 100/100。它衡量确定性路由，不代表真实模型 SQL 或答案准确率。
+
+### 兼容 RAG 评估（20 条 gold_qa）
 
 ```bash
 cd ai-ecommerce-assistant
@@ -453,10 +473,29 @@ python eval/run_eval.py --report eval/my_report.md
 - Top1 score
 - 单次检索耗时
 
+### 真实模型评测
+
+真实模型评测需要用户显式配置 API Key 后单独运行。仓库当前没有提交或宣称真实模型准确率，也不会在 CI 中消耗付费额度。计划指标包括 SQL 执行成功率、基于结果的正确率、工具轨迹正确率、引用完整率、安全拦截率、延迟和 Token 用量。
+
+### 已知限制与降级
+
+- 未配置模型 Key：知识问题仍可返回检索来源；数据问题返回明确配置提示，不伪造结果。
+- Redis 不可用：自动降级到最多 1,000 个会话的内存存储；会话保留最近 6 轮、TTL 30 分钟。
+- RAG 无命中：继续执行可用分支并返回空来源，不伪造引用。
+- SQL 校验或执行失败：仅使用脱敏错误纠正一次，第二次失败后停止循环并返回明确错误。
+- 本地演示可使用 SQLite；生产与完整 CI 使用 MySQL 8，只读账号是安全边界的一部分。
+
 ## 项目结构
 
 ```
 ai-commerce-intelligence-platform/
+├── agent_core/                   # FastAPI / Streamlit 共享 Agent Runtime
+│   ├── runtime.py                # LangGraph 分节点工作流
+│   ├── model_adapter.py          # 结构化模型适配
+│   ├── session.py                # Redis / 内存会话
+│   ├── sql_safety.py             # SQL AST 安全层
+│   ├── rag/                      # 共享 Markdown 检索
+│   └── eval/                     # 100 条路由 + 15 条 RAG 评测集
 ├── backend/                      # FastAPI 后端
 │   ├── main.py                   # 应用入口 + 生命周期
 │   ├── config.py                 # Pydantic Settings 配置
@@ -494,13 +533,14 @@ ai-commerce-intelligence-platform/
 │   │   ├── tools.py              # LangChain Tool 工厂
 │   │   ├── extractor.py          # 来源还原（无 streamlit 依赖）
 │   │   └── metrics.py            # 跨进程 stats 共享 + Prometheus 渲染 + JSONL 事件
-│   ├── tests/                    # 107 个 RAG 单元测试
+│   ├── tests/                    # 107 项 AI/RAG 测试
 │   ├── eval/                     # 评估集 + 评估脚本
 │   ├── data/chroma/              # Chroma 持久化目录
 │   ├── pytest.ini                # pytest 配置
 │   └── requirements.txt
 ├── .github/workflows/            # GitHub Actions CI/CD
 │   ├── ci.yml                    # 测试流水线（PR 触发）
+│   ├── docker-smoke.yml          # 空卷 Compose 冷启动验收
 │   └── release.yml               # Docker 镜像构建（push main / tag 触发）
 ├── scripts/
 │   └── health_check.py           # 全栈健康检查脚本（本地 + CI）
@@ -528,13 +568,13 @@ ai-commerce-intelligence-platform/
 | Web 框架 | FastAPI 0.110+ + Uvicorn |
 | ORM | SQLAlchemy 2.0 (async) |
 | 前端 | Streamlit 1.28+ + Plotly |
-| AI | LangChain + DeepSeek `deepseek-chat`（OpenAI 兼容接口） |
+| AI | LangGraph + LangChain + OpenAI 兼容模型接口 |
 | RAG | Chroma（向量库） + BGE-small-zh-v1.5（Embedding） + LangChain Tool |
 | 数据库 | MySQL 8.0 |
 | 缓存 | Redis 7 |
 | 反代 | Nginx |
 | 容器 | Docker + Docker Compose |
-| 测试 | pytest（61 个后端用例 + 107 个 RAG 用例 + 20 条 gold_qa 评估集） |
+| 测试 | pytest（118 项后端 + 107 项 AI/RAG）+ 100 条路由 + 15 条 RAG 离线评测 |
 
 ## License
 

@@ -1,31 +1,24 @@
-import logging
-import re
-import json
 import asyncio
-import hashlib
+import logging
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Optional
 from functools import lru_cache
+from pathlib import Path
 
 from langchain_community.utilities.sql_database import SQLDatabase
-from langchain_openai import ChatOpenAI
-from langchain_community.agent_toolkits import create_sql_agent, SQLDatabaseToolkit
 from sqlalchemy import text
 
+from agent_core import AgentRuntime
+from agent_core.model_adapter import OpenAIModelAdapter
+from agent_core.rag import MarkdownKnowledgeRetriever
+from agent_core.session import FallbackConversationStore, MemoryConversationStore, RedisConversationStore
 from backend.config import get_settings
-from backend.models.schemas import AIQueryResponse
-from backend.utils.text_cleaner import clean_sql as _clean_sql
+from backend.models.schemas import AIQueryResponse, AgentUsage
 from backend.utils.sql_guard import guard_read_only_engine, is_read_only_sql
 
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
-
-SENSITIVE_PATTERNS = [
-    r"密码", r"手机号", r"身份证", r"地址.*具体",
-    r"个人.*信息", r"隐私", r"password", r"phone.*number",
-]
 
 BUSINESS_CONTEXT = """## 数据时间范围
 - 数据时间范围：2025-01-01 至 2025-12-31（共1年数据）
@@ -51,65 +44,7 @@ BUSINESS_CONTEXT = """## 数据时间范围
 8. 仅回答电商数据相关问题"""
 
 
-def _is_sensitive(query: str) -> bool:
-    for pattern in SENSITIVE_PATTERNS:
-        if re.search(pattern, query, re.IGNORECASE):
-            return True
-    return False
-
-
-def _extract_sql_from_intermediate(response: dict) -> Optional[str]:
-    steps = response.get("intermediate_steps", [])
-    for step in steps:
-        if isinstance(step, tuple) and len(step) >= 2:
-            action, observation = step
-            if hasattr(action, "tool_input"):
-                tool_input = action.tool_input
-                if isinstance(tool_input, dict):
-                    sql = tool_input.get("sql") or tool_input.get("query")
-                    if sql and isinstance(sql, str) and "SELECT" in sql.upper():
-                        return _clean_sql(sql, strip_html=True)
-                elif isinstance(tool_input, str) and "SELECT" in tool_input.upper():
-                    return _clean_sql(tool_input, strip_html=True)
-            if isinstance(observation, str):
-                clean_obs = re.sub(r'<[^>]+>', '', observation)
-                sql_match = re.search(r'SELECT\s+[\s\S]+?(?:;|$)', clean_obs, re.IGNORECASE)
-                if sql_match:
-                    return _clean_sql(sql_match.group(0), strip_html=True)
-    output = response.get("output", "")
-    if isinstance(output, str):
-        match = re.search(r'```sql\s*(.*?)```', output, re.IGNORECASE | re.DOTALL)
-        if match:
-            return _clean_sql(match.group(1), strip_html=True)
-    return None
-
-
-def _extract_sql_from_answer(answer: str) -> Optional[str]:
-    if not answer or not isinstance(answer, str):
-        return None
-    # 保护代码块后再剥离 HTML 高亮标签（LLM 可能回显带 span 的 SQL）
-    codeblocks: dict[str, str] = {}
-    def _stash(m):
-        key = f"\x00SQLCB{len(codeblocks)}ENDSQLCB\x00"
-        codeblocks[key] = m.group(0)
-        return key
-    stripped = re.sub(r'```[\s\S]*?```', _stash, answer)
-    stripped = re.sub(r'<[^>]+>', '', stripped)
-    for k, v in codeblocks.items():
-        stripped = stripped.replace(k, v)
-    patterns = [
-        r'```sql\s*(.*?)```',
-        r'```(SELECT[\s\S]*?)```',
-        r'(SELECT\s+[\s\S]*?;)',
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, stripped, re.IGNORECASE | re.DOTALL)
-        if match:
-            return _clean_sql(match.group(1), strip_html=True)
-    return None
-
-
-def _detect_chart_type(columns: list[str], rows: list) -> Optional[str]:
+def _detect_chart_type(columns: list[str], rows: list) -> str | None:
     if not rows or len(columns) < 2:
         return None
     col1 = columns[0].lower()
@@ -121,7 +56,7 @@ def _detect_chart_type(columns: list[str], rows: list) -> Optional[str]:
     return "bar"
 
 
-def _build_visualization(columns: list[str], rows: list) -> Optional[dict]:
+def _build_visualization(columns: list[str], rows: list) -> dict | None:
     chart_type = _detect_chart_type(columns, rows)
     if not chart_type:
         return None
@@ -179,227 +114,94 @@ def _get_sync_db() -> SQLDatabase:
     return db
 
 
-_agent_cache: dict = {"agent": None, "settings_hash": None}
-# agent 构建涉及网络 I/O（数据库引擎、LLM 客户端），并发首问需加锁防止重复构建
-_agent_build_lock = asyncio.Lock()
+_knowledge_retriever = MarkdownKnowledgeRetriever(
+    Path(__file__).resolve().parents[2] / "ai-ecommerce-assistant" / "knowledge_base"
+)
 
 
-def _get_settings_hash() -> str:
-    return hashlib.md5(
-        f"{settings.llm_api_key}:{settings.llm_base_url}:{settings.llm_model}".encode()
-    ).hexdigest()
+async def _runtime_retrieve(query: str):
+    return await _knowledge_retriever.retrieve(query, top_k=3)
 
 
-def _build_agent():
-    db = _get_sync_db()
-    llm = ChatOpenAI(
-        api_key=settings.llm_api_key,
-        base_url=settings.llm_base_url,
-        model=settings.llm_model,
-        temperature=0.1,
-        timeout=120,
-        max_retries=2,
+async def _runtime_schema() -> str:
+    return await asyncio.to_thread(_get_sync_db().get_table_info, ["orders"])
+
+
+async def _runtime_execute(sql: str) -> list[dict]:
+    # AST 层之后仍保留执行器黑名单与数据库只读账户两层防护。
+    return await asyncio.to_thread(_execute_query_with_columns, sql)
+
+
+_model_adapter = OpenAIModelAdapter(
+    api_key=settings.llm_api_key,
+    base_url=settings.llm_base_url,
+    model=settings.llm_model,
+    business_context=BUSINESS_CONTEXT,
+)
+
+
+def _conversation_store():
+    memory = MemoryConversationStore(ttl_seconds=1800, max_sessions=1000, max_turns=6)
+    primary = RedisConversationStore(settings.redis_url) if settings.redis_enabled else None
+    return FallbackConversationStore(primary, memory)
+
+
+_runtime = AgentRuntime(
+    retriever=_runtime_retrieve,
+    schema_loader=_runtime_schema,
+    sql_generator=_model_adapter.generate_sql,
+    sql_executor=_runtime_execute,
+    answer_generator=_model_adapter.answer,
+    conversations=_conversation_store(),
+    sql_timeout_seconds=10,
+)
+
+
+async def process_natural_language_query(
+    query: str,
+    thread_id: str | None = None,
+    *,
+    owner: str = "anonymous",
+) -> AIQueryResponse:
+    """使用共享分节点 Runtime，并转换为向后兼容的 API 响应。"""
+    state = await _runtime.invoke(query, owner=owner, thread_id=thread_id)
+    result = state["result"]
+    visualization = None
+    if result.rows:
+        columns = list(result.rows[0])
+        visualization = _build_visualization(columns, [list(item.values()) for item in result.rows])
+    return AIQueryResponse(
+        sql=result.sql,
+        result=result.rows,
+        answer=result.answer,
+        visualization=visualization,
+        sql_error=result.sql_error,
+        request_id=state["request_id"],
+        thread_id=state["thread_id"],
+        intent=result.intent,
+        sources=[
+            {
+                "filename": item.filename,
+                "section": item.section,
+                "doc_type": item.doc_type,
+                "score": item.score,
+                "snippet": item.snippet,
+            }
+            for item in result.sources
+        ],
+        steps=[
+            {
+                "name": item.name,
+                "status": item.status,
+                "duration_ms": item.duration_ms,
+                "summary": item.summary,
+            }
+            for item in result.steps
+        ],
+        usage=AgentUsage(
+            input_tokens=result.usage.input_tokens,
+            output_tokens=result.usage.output_tokens,
+            total_tokens=result.usage.total_tokens,
+            latency_ms=result.usage.latency_ms,
+        ) if result.usage else None,
     )
-    toolkit = SQLDatabaseToolkit(db=db, llm=llm)
-
-    prefix = f"""你是一个专业的 AI 智能商业分析助手。你可以访问一个名为 `orders` 的电商订单数据库表。
-
-{BUSINESS_CONTEXT}
-
-重要：你必须严格按照以下 ReAct 格式回答，每一步都要以 "Thought:" 开头：
-
-Thought: 我需要查看表结构
-Action: sql_db_schema
-Action Input: orders
-
-Thought: 根据表结构，我需要查询...
-Action: sql_db_query
-Action Input: SELECT ... FROM orders WHERE ...
-
-Thought: 查询完成，总结结果
-Final Answer: 根据查询结果...
-
-注意：
-- Action Input 必须是纯文本，不是 JSON
-- sql_db_query 的 Action Input 必须是完整的 SELECT 语句
-- 不要创建表，直接查询 orders 表
-- 使用 payment_amount 表示付款金额（实际销售额）"""
-
-    agent = create_sql_agent(
-        llm=llm,
-        toolkit=toolkit,
-        prefix=prefix,
-        verbose=False,
-        agent_type="zero-shot-react-description",
-        handle_parsing_errors=True,
-        agent_executor_kwargs={"return_intermediate_steps": True},
-    )
-    return agent
-
-
-async def _get_agent():
-    if not settings.llm_api_key:
-        return None
-
-    current_hash = _get_settings_hash()
-    if _agent_cache["agent"] is not None and _agent_cache["settings_hash"] == current_hash:
-        return _agent_cache["agent"]
-
-    async with _agent_build_lock:
-        # double-check：等锁期间可能已被其他并发请求构建完成
-        if _agent_cache["agent"] is not None and _agent_cache["settings_hash"] == current_hash:
-            return _agent_cache["agent"]
-        agent = await asyncio.to_thread(_build_agent)
-        _agent_cache["agent"] = agent
-        _agent_cache["settings_hash"] = current_hash
-        return agent
-
-
-async def process_natural_language_query(query: str) -> AIQueryResponse:
-    """处理自然语言查询，返回SQL执行结果"""
-    if _is_sensitive(query):
-        return AIQueryResponse(
-            sql=None,
-            result=[],
-            answer="⚠️ 该数据已脱敏，仅支持聚合查询，无法提供用户个人隐私数据。",
-            visualization=None,
-        )
-
-    if not settings.llm_api_key:
-        return AIQueryResponse(
-            sql=None,
-            result=[],
-            answer="⚠️ AI功能未配置，请在 .env 中设置 LLM_API_KEY。",
-            visualization=None,
-        )
-
-    try:
-        agent = await _get_agent()
-        if agent is None:
-            return AIQueryResponse(
-                sql=None,
-                result=[],
-                answer="⚠️ AI功能未配置，请在 .env 中设置 LLM_API_KEY。",
-                visualization=None,
-            )
-
-        try:
-            response = await asyncio.to_thread(agent.invoke, {"input": query})
-        except Exception as invoke_err:
-            err_msg = str(invoke_err)
-            if "output parsing error" in err_msg.lower() or "Could not parse" in err_msg:
-                match = re.search(r'Could not parse LLM output:\s*`([^`]*)', err_msg, re.DOTALL)
-                raw_output = match.group(1).strip() if match else err_msg
-                return AIQueryResponse(
-                    sql=_extract_sql_from_answer(raw_output),
-                    result=[],
-                    answer=raw_output,
-                    visualization=None,
-                )
-            raise
-
-        answer = response.get("output", "抱歉，暂时无法回答这个问题。")
-
-        if "output parsing error" in str(answer).lower() or "Could not parse" in str(answer):
-            extracted_sql = _extract_sql_from_intermediate(response)
-            if not extracted_sql:
-                extracted_sql = _extract_sql_from_answer(answer)
-            match = re.search(r'Could not parse LLM output:\s*`([^`]*)', answer, re.DOTALL)
-            clean_answer = match.group(1).strip() if match else answer.split("Could not parse")[0].strip()
-
-            result_data = []
-            visualization = None
-            sql_error = None
-            if extracted_sql:
-                try:
-                    if is_read_only_sql(extracted_sql):
-                        result_data = await asyncio.to_thread(
-                            _execute_query_with_columns,
-                            extracted_sql,
-                        )
-
-                        if result_data and isinstance(result_data[0], dict):
-                            columns = list(result_data[0].keys())
-                            rows = [list(item.values()) for item in result_data]
-                            visualization = _build_visualization(columns, rows)
-                except Exception as e:
-                    # 记录并上抛执行错误，避免"SQL 挂了"被误判为"无数据"
-                    logger.warning(f"解析错误后SQL执行失败: {e}")
-                    sql_error = f"SQL 执行失败: {e}"
-
-            if not result_data:
-                steps = response.get("intermediate_steps", [])
-                for step in steps:
-                    if isinstance(step, tuple) and len(step) >= 2:
-                        _, observation = step
-                        if isinstance(observation, str):
-                            obs_match = re.search(r'\[?\{[^}]+\}?\]', observation)
-                            if obs_match:
-                                try:
-                                    parsed = json.loads(obs_match.group(0))
-                                    if isinstance(parsed, list):
-                                        result_data = parsed
-                                    elif isinstance(parsed, dict):
-                                        result_data = [parsed]
-                                    if result_data and isinstance(result_data[0], dict):
-                                        columns = list(result_data[0].keys())
-                                        rows = [list(item.values()) for item in result_data]
-                                        visualization = _build_visualization(columns, rows)
-                                    break
-                                except json.JSONDecodeError:
-                                    pass
-
-            return AIQueryResponse(
-                sql=extracted_sql,
-                result=result_data,
-                answer=clean_answer,
-                visualization=visualization,
-                sql_error=sql_error,
-            )
-
-        extracted_sql = _extract_sql_from_intermediate(response)
-
-        result_data = []
-        visualization = None
-        sql_error = None
-
-        if extracted_sql:
-            try:
-                if not is_read_only_sql(extracted_sql):
-                    logger.warning(f"拦截危险SQL: {extracted_sql[:100]}")
-                    return AIQueryResponse(
-                        sql=None,
-                        result=[],
-                        answer="⚠️ 仅支持数据查询操作，不允许修改数据库",
-                        visualization=None,
-                    )
-                result_data = await asyncio.to_thread(
-                    _execute_query_with_columns,
-                    extracted_sql,
-                )
-
-                if result_data and isinstance(result_data[0], dict):
-                    columns = list(result_data[0].keys())
-                    rows = [list(item.values()) for item in result_data]
-                    visualization = _build_visualization(columns, rows)
-            except Exception as e:
-                # 记录并上抛执行错误，避免"SQL 挂了"被误判为"无数据"
-                logger.warning(f"SQL执行失败: {e}")
-                sql_error = f"SQL 执行失败: {e}"
-
-        return AIQueryResponse(
-            sql=extracted_sql,
-            result=result_data,
-            answer=answer,
-            visualization=visualization,
-            sql_error=sql_error,
-        )
-
-    except Exception as e:
-        logger.error(f"AI查询处理失败: {e}")
-        return AIQueryResponse(
-            sql=None,
-            result=[],
-            answer="⚠️ 查询处理失败，请稍后重试",
-            visualization=None,
-        )

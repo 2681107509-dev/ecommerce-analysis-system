@@ -13,12 +13,13 @@ def pytest_configure(config):
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-    # 测试环境与生产 .env 解耦：生产 .env 已轮换为 bcrypt 哈希 + DEBUG=False，
-    # 而集成测试钉死 admin/admin123（与 CI workflow 写 .env 的行为一致）。
-    # 环境变量优先级高于 .env 文件；仅在未显式设置时兜底，不覆盖 CI 传参。
-    os.environ.setdefault("DEBUG", "true")
-    os.environ.setdefault("ADMIN_PASSWORD", "admin123")
-    os.environ.setdefault("ANALYST_PASSWORD", "analyst123")
+    # 认证测试必须与开发机/CI 的生产凭据完全解耦；数据库连接变量仍由调用方提供。
+    os.environ["DEBUG"] = "true"
+    os.environ["JWT_SECRET"] = "pytest-only-secret-never-use-in-production"
+    os.environ["ADMIN_USERNAME"] = "admin"
+    os.environ["ADMIN_PASSWORD"] = "admin123"
+    os.environ["ANALYST_USERNAME"] = "analyst"
+    os.environ["ANALYST_PASSWORD"] = "analyst123"
 
 
 @pytest.fixture(autouse=True)
