@@ -19,7 +19,7 @@
 | **RFM 用户画像** | SQLAlchemy + 量化分群 | R/F/M 五分位评分 → 8 类用户分群 + 流失预警 |
 | **数据分析 Notebook** | Jupyter + Pandas | 数据清洗、销售/时间/用户多维分析 |
 | **RAG 业务知识库** | Chroma + BGE-small-zh-v1.5 | 6 份业务文档（术语/数据字典/KPI/规则/API/黄金查询）向量检索 |
-| **测试 & 评估** | pytest + 离线评估器 | 225 项自动化测试 + 100 条路由评测 + 15 条 RAG 检索评测 |
+| **测试 & 评估** | pytest + 离线/真实模型评估器 | 231 项自动化测试 + 100 条路由 + 15 条 RAG + 15 条 GLM 真实评测 |
 
 ## 在线演示
 
@@ -123,6 +123,14 @@ LLM_BASE_URL=https://api.deepseek.com
 LLM_MODEL=deepseek-chat
 ```
 
+也可使用智谱 OpenAI 兼容接口；Key 只写入本机 `.env`，不要提交：
+
+```env
+LLM_API_KEY=<你的临时 Key>
+LLM_BASE_URL=https://open.bigmodel.cn/api/paas/v4
+LLM_MODEL=glm-4.7-flash
+```
+
 **`ai-ecommerce-assistant/.env`**：
 
 ```env
@@ -190,6 +198,15 @@ FastAPI 与 Streamlit 只负责各自的配置和展示，统一调用 `agent_co
 ```
 
 安全边界包括输入拦截、SQL AST 校验、SQLAlchemy 执行前拦截和数据库只读账号。SQL 仅能访问 `orders`，禁止多语句、写操作、锁表、`SLEEP`、`BENCHMARK`、`LOAD_FILE`，并自动限制最多 500 行。
+
+### 关键技术决策与取舍
+
+- **共享 Runtime**：FastAPI 与 Streamlit 注入同一张 LangGraph，避免两套 Agent 行为漂移；代价是核心层必须保持 Web 框架无关。
+- **确定性路由优先**：安全、澄清和常见业务意图不消耗模型额度，结果可重复；复杂语义仍受规则覆盖范围限制。
+- **JSON Mode + Pydantic**：兼容不同 OpenAI 协议提供方，同时拒绝 Markdown SQL；结构正确不代表结果正确，因此还要执行结果评测。
+- **四层 SQL 防护**：输入规则、SQLGlot AST、SQLAlchemy 执行拦截、数据库只读账号互相独立，单层失效不会直接获得写权限。
+- **真实结果评测**：候选 SQL 与参考 SQL 比较 102,287 行数据上的结果集，不要求字符串相同；模型评测显式运行，不在 CI 偷用 Key。
+- **有界降级**：Redis 不可用时回落到最多 1,000 个内存会话；SQL 只纠错一次，避免无限 Agent 循环。
 
 
 ### 知识库文档（`ai-ecommerce-assistant/knowledge_base/`）
@@ -311,7 +328,7 @@ rag_tool_call_total 18
 
 | Workflow | 触发 | 职责 |
 |----------|------|------|
-| `.github/workflows/ci.yml` | PR / push main | AI 助手 107 项测试（Python 3.12 + 3.13）+ 后端 118 项测试（MySQL 8）+ Ruff + 编译 + 离线 Agent 评测 |
+| `.github/workflows/ci.yml` | PR / push main | AI 助手 107 项测试（Python 3.12 + 3.13）+ 后端 124 项测试（MySQL 8）+ Ruff + 编译 + 离线 Agent 评测 |
 | `.github/workflows/docker-smoke.yml` | PR / push main | 空卷构建全栈、断言 102,287 行、验证 7 个入口与 WebSocket 握手 |
 | `.github/workflows/release.yml` | push main / tag `v*.*.*` / 手动 | 构建 backend / streamlit / ai-assistant 三个 Docker 镜像，**多架构**（linux/amd64 + linux/arm64），推送到 `ghcr.io/super-zxq/ai-commerce-intelligence-platform-{backend,streamlit,ai-assistant}` |
 
@@ -410,10 +427,10 @@ docker compose pull && docker compose up -d
 
 ## 测试与评估
 
-### 自动化测试（225 项）
+### 自动化测试（231 项）
 
 ```bash
-# 后端（118 项，完整运行需要 MySQL）
+# 后端（124 项，完整运行需要 MySQL）
 python -m pytest backend/tests/ -v
 
 # AI/RAG（107 项）
@@ -423,6 +440,7 @@ python -m pytest ai-ecommerce-assistant/tests/ -v
 **测试覆盖：**
 - `test_agent_runtime_core.py` — 分支工具顺序、SQL AST、一次重试、用户会话隔离、Redis 降级、Token `null` 语义和 API 兼容
 - `test_agent_workflow.py` / `test_agent_evaluation.py` — 安全短路、意图路由和离线发布门槛
+- `test_live_model_evaluation.py` — 真实评测集约束、结果集比较与共享 Schema 描述
 - `test_rag_prompts.py` — 提示词模板（工具说明、决策树、回答模板）
 - `test_rag_tools.py` — sentinel 序列化 + Tool 工厂（空命中/异常/正常）
 - `test_rag_extractor.py` — 从 `intermediate_steps` 还原来源（多步聚合、类型防御）
@@ -475,7 +493,9 @@ python eval/run_eval.py --report eval/my_report.md
 
 ### 真实模型评测
 
-真实模型评测需要用户显式配置 API Key 后单独运行。仓库当前没有提交或宣称真实模型准确率，也不会在 CI 中消耗付费额度。计划指标包括 SQL 执行成功率、基于结果的正确率、工具轨迹正确率、引用完整率、安全拦截率、延迟和 Token 用量。
+真实模型评测需要用户显式配置 API Key 和 `--allow-network`，不会在 CI 中消耗额度。最新可审计快照使用智谱 `glm-4-flash-250414`，在完整 102,287 行数据上的 15 条评测中通过 14 条（93.33%）：结构化输出 100%、SQL 结果正确率 90%、知识关键词覆盖率与引用完整率均为 100%，P50/P95 延迟为 1,508/8,941 ms，共使用 6,894 Tokens。
+
+评测比较候选 SQL 与参考 SQL 的实际结果集，不使用 SQL 字符串相等或模型自评。唯一失败项及逐条输出保留在 [`docs/evaluation/`](docs/evaluation/README.md)；15 条小样本不代表所有真实问题的总体准确率。
 
 ### 已知限制与降级
 
@@ -483,6 +503,7 @@ python eval/run_eval.py --report eval/my_report.md
 - Redis 不可用：自动降级到最多 1,000 个会话的内存存储；会话保留最近 6 轮、TTL 30 分钟。
 - RAG 无命中：继续执行可用分支并返回空来源，不伪造引用。
 - SQL 校验或执行失败：仅使用脱敏错误纠正一次，第二次失败后停止循环并返回明确错误。
+- 真实模型评测仅 15 条且输出具有随机性；当前快照有 1 条 SQL 在一次纠错后仍失败。
 - 本地演示可使用 SQLite；生产与完整 CI 使用 MySQL 8，只读账号是安全边界的一部分。
 
 ## 项目结构
@@ -492,10 +513,11 @@ ai-commerce-intelligence-platform/
 ├── agent_core/                   # FastAPI / Streamlit 共享 Agent Runtime
 │   ├── runtime.py                # LangGraph 分节点工作流
 │   ├── model_adapter.py          # 结构化模型适配
+│   ├── live_evaluation.py        # 显式联网的真实模型评测器
 │   ├── session.py                # Redis / 内存会话
 │   ├── sql_safety.py             # SQL AST 安全层
 │   ├── rag/                      # 共享 Markdown 检索
-│   └── eval/                     # 100 条路由 + 15 条 RAG 评测集
+│   └── eval/                     # 路由、RAG 与真实模型评测集
 ├── backend/                      # FastAPI 后端
 │   ├── main.py                   # 应用入口 + 生命周期
 │   ├── config.py                 # Pydantic Settings 配置
@@ -574,7 +596,7 @@ ai-commerce-intelligence-platform/
 | 缓存 | Redis 7 |
 | 反代 | Nginx |
 | 容器 | Docker + Docker Compose |
-| 测试 | pytest（118 项后端 + 107 项 AI/RAG）+ 100 条路由 + 15 条 RAG 离线评测 |
+| 测试 | pytest（124 项后端 + 107 项 AI/RAG）+ 100 条路由 + 15 条 RAG + 15 条 GLM 真实评测 |
 
 ## License
 

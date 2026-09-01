@@ -1,4 +1,3 @@
-import ast
 import asyncio
 import datetime
 import decimal
@@ -19,7 +18,6 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 from dotenv import load_dotenv
-from langchain_community.utilities.sql_database import SQLDatabase
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
@@ -31,6 +29,7 @@ if _PROJECT_ROOT not in sys.path:
 from rag import metrics as rag_metrics
 
 from agent_core import AgentRuntime
+from agent_core.db_schema import describe_table
 from agent_core.model_adapter import OpenAIModelAdapter
 from agent_core.models import AgentSource
 from agent_core.session import MemoryConversationStore
@@ -110,6 +109,10 @@ BUSINESS_CONTEXT = """## 数据时间范围
 - 退款率 = 退款订单数 / 总订单数
 - 复购率 = 消费2次及以上的用户数 / 总用户数
 - 客单价 = 总付款金额 / 总订单数
+- 数据起止日期仅用于解释“最近”问题；用户未指定时间时，禁止添加 order_time/order_date 条件或全年过滤
+- 订单量必须使用 COUNT(DISTINCT order_id)，禁止使用 COUNT(*)
+- 除非用户明确要求排除退款，否则销售额、订单量、用户数等指标包含退款订单
+- 用户明确指定月份或日期时必须严格使用该范围，不得扩大为全年
 - RFM 分层阈值：Recency≤30天为活跃，Frequency≥2次为高频，Monetary≥1500元为高价值
 - 下单小时：0-23，高峰时段为 11-13 时和 19-21 时
 - 星期几：周一至周日
@@ -247,22 +250,8 @@ def get_db_uri():
 
 
 @st.cache_resource
-def init_db():
-    try:
-        database = SQLDatabase.from_uri(get_db_uri())
-        guard_read_only_engine(database._engine)
-        return database
-    except Exception as e:
-        logger.error("数据库连接失败: %s", e, exc_info=True)
-        st.error(f"❌ 数据库连接失败：{sanitize_error(e)}")
-        return None
-
-
-@st.cache_resource
 def init_engine() -> Engine | None:
-    """独立于 langchain 的 SQLAlchemy Engine，直接执行 SQL。
-    避免 db.run(sql, fetch="cursor") 在部分方言（如 KingbaseES）上抛
-    NotImplementedError 后 fallback 到 ast.literal_eval 的 'malformed node or string' 错误。"""
+    """初始化受只读拦截器保护的 SQLAlchemy Engine。"""
     try:
         engine = create_engine(get_db_uri(), pool_pre_ping=True)
         guard_read_only_engine(engine)
@@ -300,10 +289,10 @@ def init_retriever():
         }
 
 
-def get_session_runtime(_db, _retriever):
+def get_session_runtime(_engine, _retriever):
     """按当前 Streamlit 会话创建共享 Runtime；API Key 不进入全局缓存。"""
     api_key = st.session_state.get("model_api_key", "").strip()
-    if _db is None or not api_key:
+    if _engine is None or not api_key:
         return None
 
     base_url = st.session_state.get("model_base_url", BASE_URL).strip()
@@ -335,7 +324,7 @@ def get_session_runtime(_db, _retriever):
         ]
 
     async def load_schema() -> str:
-        return await asyncio.to_thread(_db.get_table_info, ["orders"])
+        return await asyncio.to_thread(describe_table, _engine, "orders")
 
     async def execute_sql(sql: str) -> list[dict]:
         frame = await asyncio.to_thread(run_sql_query, sql)
@@ -730,91 +719,6 @@ def strip_garbled_content(text: str) -> str:
     return text.strip()
 
 
-def clean_sqlalchemy_result(result: str) -> str:
-    """将 SQLAlchemy 返回的字符串结果中的特殊类型（Decimal、datetime、UUID 等）
-    转换为 ast.literal_eval 可解析的字面量。
-
-    SQLAlchemy 通过 str()/repr() 序列化结果时，会保留类型名：
-        Decimal('123.45')          -> '123.45'
-        datetime.date(2025,12,31)  -> '2025-12-31'
-        datetime.datetime(...)     -> '2025-12-31 10:30:00'
-        datetime.time(...)         -> '10:30:00'
-        UUID('...')                -> '...'
-    """
-    if not result:
-        return result
-
-    # Decimal('123.45') 或 Decimal("123.45") -> 字符串字面量
-    result = re.sub(r"Decimal\(\s*'(.*?)'\s*\)", r"'\1'", result)
-    result = re.sub(r'Decimal\(\s*"(.*?)"\s*\)', r'"\1"', result)
-    # Decimal(123.45) 纯数字 -> 数字字面量
-    result = re.sub(r"Decimal\(\s*([+-]?[\d.eE]+)\s*\)", r"\1", result)
-
-    # datetime.date(YYYY, M, D) -> 'YYYY-MM-DD'
-    def _fmt_date(m):
-        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
-        return f"'{y:04d}-{mo:02d}-{d:02d}'"
-
-    result = re.sub(
-        r"datetime\.date\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)",
-        _fmt_date, result
-    )
-
-    # datetime.datetime(YYYY, M, D, h, m, s) -> 'YYYY-MM-DD HH:MM:SS'
-    def _fmt_datetime(m):
-        nums = [int(g) if g else 0 for g in m.groups()]
-        while len(nums) < 6:
-            nums.append(0)
-        return f"'{nums[0]:04d}-{nums[1]:02d}-{nums[2]:02d} {nums[3]:02d}:{nums[4]:02d}:{nums[5]:02d}'"
-
-    result = re.sub(
-        r"datetime\.datetime\(\s*(\d+)?\s*(?:,\s*(\d+))?\s*(?:,\s*(\d+))?"
-        r"(?:\s*,\s*(\d+))?(?:\s*,\s*(\d+))?(?:\s*,\s*(\d+))?\s*\)",
-        _fmt_datetime, result
-    )
-
-    # datetime.time(h, m, s) -> 'HH:MM:SS'
-    def _fmt_time(m):
-        nums = [int(g) if g else 0 for g in m.groups() if g is not None]
-        while len(nums) < 3:
-            nums.append(0)
-        return f"'{nums[0]:02d}:{nums[1]:02d}:{nums[2]:02d}'"
-
-    result = re.sub(
-        r"datetime\.time\(\s*(\d+)?\s*(?:,\s*(\d+))?\s*(?:,\s*(\d+))?\s*\)",
-        _fmt_time, result
-    )
-
-    # UUID('...') / UUID("...") -> '...'
-    result = re.sub(r"UUID\(\s*'([^']*)'\s*\)", r"'\1'", result)
-    result = re.sub(r'UUID\(\s*"([^"]*)"\s*\)', r'"\1"', result)
-
-    return result
-
-
-def extract_column_names(sql: str) -> list[str]:
-    sql_upper = sql.upper().strip()
-    select_match = re.search(r'SELECT\s+(.*?)\s+FROM', sql_upper, re.DOTALL)
-    if not select_match:
-        return []
-    
-    select_clause = select_match.group(1)
-    columns = []
-    
-    parts = re.split(r',\s*(?![^(]*\))', select_clause)
-    for part in parts:
-        part = part.strip()
-        as_match = re.search(r'\bAS\s+(\w+)', part, re.IGNORECASE)
-        if as_match:
-            columns.append(as_match.group(1))
-        else:
-            col_match = re.search(r'(\w+)\s*$', part)
-            if col_match:
-                columns.append(col_match.group(1))
-    
-    return columns if columns else None
-
-
 def _convert_value(val):
     """将 SQLAlchemy 返回的原始值转换为 DataFrame 友好的 Python 原生类型。
     处理 datetime/Decimal/bytes/UUID 等特殊类型，避免后续处理时类型不一致。"""
@@ -844,101 +748,18 @@ def run_sql_query(sql: str) -> pd.DataFrame | None:
     try:
         sql = clean_sql_local(sql)
         ensure_read_only_sql(sql)
-
-        # 路径 0（首选）：直接用 SQLAlchemy Engine 执行，绕开 langchain wrapper。
-        # 不依赖 db.run(fetch="cursor") 的方言实现，对 KingbaseES/MySQL/SQLite 都能
-        # 拿到原生 SQLAlchemy Result 对象，类型转换更稳定。
         engine = init_engine()
-        if engine is not None:
-            try:
-                with engine.connect() as conn:
-                    raw_result = conn.execute(text(sql))
-                    cols = list(raw_result.keys())
-                    raw_rows = raw_result.fetchall()
-                if not raw_rows:
-                    return pd.DataFrame(columns=cols)
-                converted = [
-                    tuple(_convert_value(v) for v in row) for row in raw_rows
-                ]
-                return pd.DataFrame(converted, columns=cols)
-            except Exception as e:
-                logger.warning("引擎直连执行失败: %s", e, exc_info=True)
-                st.warning(f"⚠️ 引擎直连执行失败，回退到 langchain：{sanitize_error(e)}")
-
-        # 路径 1：langchain SQLDatabase.run(fetch="cursor")
-        db = init_db()
-        if db is None:
+        if engine is None:
             return None
-
-        result = None
-        try:
-            result = db.run(sql, fetch="cursor")
-        except (TypeError, ValueError, NotImplementedError):
-            result = db.run(sql)
-
-        if hasattr(result, "keys") and hasattr(result, "fetchall"):
-            try:
-                cols = list(result.keys())
-                raw_rows = result.fetchall()
-            except Exception as e:
-                st.warning(f"读取数据库结果失败：{e}")
-                return None
-
-            if not raw_rows:
-                return pd.DataFrame(columns=cols)
-
-            converted = [
-                tuple(_convert_value(v) for v in row) for row in raw_rows
-            ]
-            return pd.DataFrame(converted, columns=cols)
-
-        # 路径 2：字符串结果（fallback，旧版 langchain）
-        if isinstance(result, str):
-            try:
-                rows = json.loads(result)
-                return pd.DataFrame(rows)
-            except json.JSONDecodeError:
-                try:
-                    result_cleaned = clean_sqlalchemy_result(result)
-                    data = ast.literal_eval(result_cleaned)
-                    if isinstance(data, list) and len(data) > 0 and isinstance(data[0], tuple):
-                        cols = extract_column_names(sql)
-                        if cols and len(cols) == len(data[0]):
-                            return pd.DataFrame(data, columns=cols)
-                        return pd.DataFrame(data)
-                    if isinstance(data, list):
-                        return pd.DataFrame(data)
-                    return None
-                except Exception as e:
-                    st.warning(f"解析数据库结果失败：{e}")
-                    return None
-
-        # 路径 3：已经是 list[dict] / list[tuple] / (cols, data) / 标量
-        if isinstance(result, list):
-            if len(result) == 0:
-                return pd.DataFrame()
-            if isinstance(result[0], dict):
-                return pd.DataFrame(result)
-            if isinstance(result[0], tuple):
-                cols = extract_column_names(sql)
-                if cols and len(cols) == len(result[0]):
-                    return pd.DataFrame(result, columns=cols)
-                return pd.DataFrame(result)
-            return pd.DataFrame(result)
-
-        if isinstance(result, tuple) and len(result) == 2:
-            cols, data = result
-            return pd.DataFrame(data, columns=cols)
-
-        if isinstance(result, (int, float, str)):
-            cols = extract_column_names(sql)
-            if not cols:
-                cols = ['value']
-            return pd.DataFrame([{cols[0]: result}])
-
-        return None
-
-    except Exception:
+        with engine.connect() as conn:
+            raw_result = conn.execute(text(sql))
+            cols = list(raw_result.keys())
+            raw_rows = raw_result.fetchall()
+        converted = [tuple(_convert_value(value) for value in row) for row in raw_rows]
+        return pd.DataFrame(converted, columns=cols)
+    except Exception as exc:
+        logger.warning("只读 SQL 执行失败: %s", exc, exc_info=True)
+        st.warning(f"⚠️ 查询执行失败：{sanitize_error(exc)}")
         return None
 
 
@@ -1034,13 +855,13 @@ def render_agent_steps(steps: list[dict]) -> None:
             )
 
 
-db = init_db()
+db_engine = init_engine()
 try:
     retriever, rag_status = init_retriever()
 except Exception as e:
     logger.error("RAG 初始化异常: %s", e)
     retriever, rag_status = None, {"ok": False, "error": str(e), "count": 0}
-runtime = get_session_runtime(db, retriever)
+runtime = get_session_runtime(db_engine, retriever)
 
 with st.sidebar:
     with st.expander("⚙️ 模型连接", expanded=not bool(st.session_state.model_api_key)):

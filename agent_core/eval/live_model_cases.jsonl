@@ -1,0 +1,15 @@
+{"id":"sql-001","kind":"sql","query":"总订单量是多少？","reference_sql":"SELECT COUNT(DISTINCT order_id) AS total_orders FROM orders"}
+{"id":"sql-002","kind":"sql","query":"总销售额是多少？保留2位小数","reference_sql":"SELECT ROUND(SUM(payment_amount), 2) AS total_sales FROM orders WHERE payment_amount > 0"}
+{"id":"sql-003","kind":"sql","query":"各平台销售额分别是多少，按销售额降序","reference_sql":"SELECT platform_type, ROUND(SUM(payment_amount), 2) AS sales FROM orders WHERE payment_amount > 0 GROUP BY platform_type ORDER BY sales DESC"}
+{"id":"sql-004","kind":"sql","query":"整体退款率是多少？以百分比表示并保留2位小数","reference_sql":"SELECT ROUND(SUM(CASE WHEN is_refund = '是' THEN 1 ELSE 0 END) * 100.0 / COUNT(DISTINCT order_id), 2) AS refund_rate FROM orders"}
+{"id":"sql-005","kind":"sql","query":"整体客单价是多少？保留2位小数","reference_sql":"SELECT ROUND(SUM(payment_amount) / COUNT(DISTINCT order_id), 2) AS avg_order_value FROM orders WHERE payment_amount > 0"}
+{"id":"sql-006","kind":"sql","query":"销售额最高的5个商品及其销售额","reference_sql":"SELECT product_id, ROUND(SUM(payment_amount), 2) AS sales FROM orders WHERE payment_amount > 0 GROUP BY product_id ORDER BY sales DESC LIMIT 5"}
+{"id":"sql-007","kind":"sql","query":"各渠道订单量分别是多少，按订单量降序","reference_sql":"SELECT channel_id, COUNT(DISTINCT order_id) AS order_count FROM orders GROUP BY channel_id ORDER BY order_count DESC"}
+{"id":"sql-008","kind":"sql","query":"2025年1月每天的销售额趋势","reference_sql":"SELECT order_date, ROUND(SUM(payment_amount), 2) AS sales FROM orders WHERE payment_amount > 0 AND order_date >= '2025-01-01' AND order_date < '2025-02-01' GROUP BY order_date ORDER BY order_date"}
+{"id":"sql-009","kind":"sql","query":"各平台优惠金额合计，按优惠金额降序","reference_sql":"SELECT platform_type, ROUND(SUM(discount_amount), 2) AS total_discount FROM orders GROUP BY platform_type ORDER BY total_discount DESC"}
+{"id":"sql-010","kind":"sql","query":"有付款记录的去重用户总数是多少？","reference_sql":"SELECT COUNT(DISTINCT user_name) AS paid_users FROM orders WHERE payment_amount > 0"}
+{"id":"answer-001","kind":"answer","query":"客单价的定义和计算公式是什么？","expected_keywords":["总销售额","总订单数"]}
+{"id":"answer-002","kind":"answer","query":"复购率如何计算？","expected_keywords":["2次","总用户"]}
+{"id":"answer-003","kind":"answer","query":"RFM 分析包含哪三个维度？","expected_keywords":["Recency","Frequency","Monetary"]}
+{"id":"answer-004","kind":"answer","query":"payment_amount 字段代表什么？","expected_keywords":["实付金额"]}
+{"id":"answer-005","kind":"answer","query":"退款率超过警戒值后应该排查什么？","expected_keywords":["商品质量","物流"]}
