@@ -13,7 +13,11 @@ from langgraph.graph import END, START, StateGraph
 
 from agent_core.models import AgentIntent, AgentResult, AgentSource, AgentStep, AgentUsage, ModelResponse
 from agent_core.session import ConversationStore, MemoryConversationStore, Message
-from agent_core.sql_safety import SQLValidationError, validate_and_limit_sql
+from agent_core.sql_safety import (
+    SQLValidationError,
+    apply_execution_guard,
+    validate_and_limit_sql,
+)
 from agent_core.workflow import classify_intent
 
 Retriever = Callable[[str], Awaitable[list[AgentSource]]]
@@ -30,6 +34,9 @@ _INJECTION_PATTERNS = (
     r"(?:system prompt|developer message|ignore previous instructions)",
     r"输出.*(?:api.?key|密钥|环境变量)",
 )
+
+# 数据库侧时限生效后留给 wait_for 的宽限期倍数：数据库负责中断，wait_for 只做兜底。
+_TIMEOUT_GRACE_FACTOR = 1.5
 
 
 class RuntimeState(TypedDict, total=False):
@@ -78,6 +85,7 @@ class AgentRuntime:
         answer_generator: AnswerGenerator,
         conversations: ConversationStore | None = None,
         sql_timeout_seconds: float = 10,
+        sql_dialect: str = "mysql",
     ):
         self._retriever = retriever
         self._schema_loader = schema_loader
@@ -86,6 +94,7 @@ class AgentRuntime:
         self._answer_generator = answer_generator
         self._conversations = conversations or MemoryConversationStore()
         self._sql_timeout_seconds = sql_timeout_seconds
+        self._sql_dialect = sql_dialect
 
         graph = StateGraph(RuntimeState)
         graph.add_node("input_safety", self._input_safety)
@@ -272,6 +281,8 @@ class AgentRuntime:
         started = time.perf_counter()
         try:
             sql = validate_and_limit_sql(state["generated_sql"])
+            # 把执行时限一并下推到数据库；state["sql"] 即真正执行的语句，便于审计。
+            sql = apply_execution_guard(sql, int(self._sql_timeout_seconds * 1000), self._sql_dialect)
             return {
                 "sql": sql,
                 "steps": self._append(state, self._event("validate_sql", started, "SQL AST 只读校验通过")),
@@ -293,7 +304,12 @@ class AgentRuntime:
     async def _execute_sql(self, state: RuntimeState) -> dict[str, Any]:
         started = time.perf_counter()
         try:
-            rows = await asyncio.wait_for(self._sql_executor(state["sql"]), timeout=self._sql_timeout_seconds)
+            # 执行上限已经写进 SQL（数据库自己中断）；这里只是兜底：wait_for 取消不了
+            # 已在库内运行的查询，所以留出宽限期，避免误报"查询执行超时"。
+            rows = await asyncio.wait_for(
+                self._sql_executor(state["sql"]),
+                timeout=self._sql_timeout_seconds * _TIMEOUT_GRACE_FACTOR,
+            )
             return {
                 "rows": rows,
                 "sql_error": "",

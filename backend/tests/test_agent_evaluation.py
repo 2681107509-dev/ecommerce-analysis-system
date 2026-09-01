@@ -23,6 +23,8 @@ def test_default_agent_evaluation_dataset_is_unique_and_balanced():
 def test_default_agent_routing_accuracy_meets_release_gate():
     report = evaluate_routing(load_cases())
     assert report["accuracy_pct"] >= 90
+    assert report["majority_baseline"] == {"intent": "data", "accuracy_pct": 52.0}
+    assert report["lift_over_majority_pct_points"] == 48.0
     assert report["failures"] == []
 
 

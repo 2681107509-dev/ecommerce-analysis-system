@@ -13,6 +13,7 @@ from agent_core.db_schema import describe_table
 from agent_core.model_adapter import OpenAIModelAdapter
 from agent_core.rag import MarkdownKnowledgeRetriever
 from agent_core.session import FallbackConversationStore, MemoryConversationStore, RedisConversationStore
+from agent_core.sql_safety import dialect_from_url
 from backend.config import get_settings
 from backend.models.schemas import AIQueryResponse, AgentUsage
 from backend.utils.sql_guard import guard_read_only_engine, is_read_only_sql
@@ -156,6 +157,8 @@ _runtime = AgentRuntime(
     answer_generator=_model_adapter.answer,
     conversations=_conversation_store(),
     sql_timeout_seconds=10,
+    # 方言决定能否把执行时限下推到数据库（MySQL 用 MAX_EXECUTION_TIME）。
+    sql_dialect=dialect_from_url(settings.ai_database_url),
 )
 
 

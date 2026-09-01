@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from agent_core.session import FallbackConversationStore, MemoryConversationStore
-from agent_core.sql_safety import SQLValidationError, validate_and_limit_sql
+from agent_core.sql_safety import SQLValidationError, apply_execution_guard, validate_and_limit_sql
 from agent_core.models import AgentResult, AgentSource, AgentStep, AgentUsage, ModelResponse
 from agent_core.runtime import AgentRuntime
 
@@ -175,3 +175,85 @@ async def test_api_adapter_preserves_fields_and_null_token_usage(monkeypatch) ->
     assert response.sources[0].filename == "glossary.md"
     assert response.usage.total_tokens is None
     assert response.steps[0].summary == "检索到 1 条来源"
+
+
+def test_sql_guard_caps_join_count() -> None:
+    """LIMIT 只裁剪输出行数，多表笛卡尔积的中间结果仍会被完整算完，必须在 AST 层拦掉。"""
+    three_joins = (
+        "SELECT * FROM orders o1 JOIN orders o2 ON 1=1 JOIN orders o3 ON 1=1 JOIN orders o4 ON 1=1"
+    )
+    assert validate_and_limit_sql(three_joins)
+    with pytest.raises(SQLValidationError, match="JOIN"):
+        validate_and_limit_sql(f"{three_joins} JOIN orders o5 ON 1=1")
+
+
+def test_execution_guard_pushes_timeout_into_mysql_select() -> None:
+    """真正的执行上限要由数据库执行：wait_for 取消不了已经在库内运行的查询。"""
+    assert apply_execution_guard("SELECT * FROM orders LIMIT 500", 10_000) == (
+        "SELECT /*+ MAX_EXECUTION_TIME(10000) */ * FROM orders LIMIT 500"
+    )
+    cte = "WITH recent AS (SELECT * FROM orders) SELECT * FROM recent LIMIT 500"
+    assert "MAX_EXECUTION_TIME(10000)" in apply_execution_guard(cte, 10_000)
+
+
+def test_execution_guard_handles_union_and_leaves_unsupported_dialects_untouched() -> None:
+    # SQLite 没有等价语法，保持原样（由上层 wait_for 兜底）。
+    assert apply_execution_guard("SELECT * FROM orders", 10_000, "sqlite") == "SELECT * FROM orders"
+    # MySQL 要求多 SELECT 语句的 hint 位于第一个 SELECT 后，并作用于整条语句。
+    union = "SELECT a FROM orders UNION SELECT b FROM orders LIMIT 500"
+    guarded = apply_execution_guard(union, 10_000)
+    assert guarded.startswith("SELECT /*+ MAX_EXECUTION_TIME(10000) */ a FROM orders UNION")
+    assert guarded.count("MAX_EXECUTION_TIME") == 1
+
+
+def _timeout_runtime(dialect: str) -> tuple[AgentRuntime, list[str]]:
+    """返回一个记录每条实际执行 SQL 的 Runtime，用于验证时限下推。"""
+    executed: list[str] = []
+
+    async def retrieve(_query: str) -> list[AgentSource]:
+        return []
+
+    async def schema() -> str:
+        return "orders(payment_amount DECIMAL)"
+
+    async def generate(_query, _schema, _history, _sources, _error) -> ModelResponse:
+        return ModelResponse("SELECT SUM(payment_amount) AS sales FROM orders")
+
+    async def execute(sql: str) -> list[dict]:
+        executed.append(sql)
+        return [{"sales": 10}]
+
+    async def answer(_query, _intent, _history, _sources, _sql, _rows) -> ModelResponse:
+        return ModelResponse("完成")
+
+    runtime = AgentRuntime(
+        retriever=retrieve,
+        schema_loader=schema,
+        sql_generator=generate,
+        sql_executor=execute,
+        answer_generator=answer,
+        sql_timeout_seconds=10,
+        sql_dialect=dialect,
+    )
+    return runtime, executed
+
+
+@pytest.mark.asyncio
+async def test_runtime_executes_sql_with_database_side_timeout() -> None:
+    """交给执行器的 SQL 必须自带数据库侧时限，state.sql 即真正执行的语句。"""
+    runtime, executed = _timeout_runtime("mysql")
+    state = await runtime.invoke("查询最近销售额")
+
+    assert executed == [
+        "SELECT /*+ MAX_EXECUTION_TIME(10000) */ SUM(payment_amount) AS sales FROM orders LIMIT 500"
+    ]
+    assert state["result"].sql == executed[0]
+
+
+@pytest.mark.asyncio
+async def test_runtime_omits_hint_on_sqlite() -> None:
+    """方言不支持时保持原样，不制造"看起来有保护"的假象。"""
+    runtime, executed = _timeout_runtime("sqlite")
+    await runtime.invoke("查询最近销售额")
+
+    assert executed == ["SELECT SUM(payment_amount) AS sales FROM orders LIMIT 500"]

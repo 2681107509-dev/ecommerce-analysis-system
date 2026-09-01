@@ -19,7 +19,7 @@
 | **RFM 用户画像** | SQLAlchemy + 量化分群 | R/F/M 五分位评分 → 8 类用户分群 + 流失预警 |
 | **数据分析 Notebook** | Jupyter + Pandas | 数据清洗、销售/时间/用户多维分析 |
 | **RAG 业务知识库** | Chroma + BGE-small-zh-v1.5 | 6 份业务文档（术语/数据字典/KPI/规则/API/黄金查询）向量检索 |
-| **测试 & 评估** | pytest + 离线/真实模型评估器 | 231 项自动化测试 + 100 条路由 + 15 条 RAG + 15 条 GLM 真实评测 |
+| **测试 & 评估** | pytest + 离线/真实模型评估器 | 238 项自动化测试 + 100 条路由回归 + 15 条词法检索回归 + 15 条 GLM 真实评测 |
 
 ## 在线演示
 
@@ -205,8 +205,10 @@ FastAPI 与 Streamlit 只负责各自的配置和展示，统一调用 `agent_co
 - **确定性路由优先**：安全、澄清和常见业务意图不消耗模型额度，结果可重复；复杂语义仍受规则覆盖范围限制。
 - **JSON Mode + Pydantic**：兼容不同 OpenAI 协议提供方，同时拒绝 Markdown SQL；结构正确不代表结果正确，因此还要执行结果评测。
 - **四层 SQL 防护**：输入规则、SQLGlot AST、SQLAlchemy 执行拦截、数据库只读账号互相独立，单层失效不会直接获得写权限。
+- **数据库侧执行时限**：MySQL 查询注入 `MAX_EXECUTION_TIME`，由数据库终止慢查询并释放连接；`asyncio.wait_for` 只保留为宽限兜底。SQLite 演示模式不声称具备同等数据库侧保护。
 - **真实结果评测**：候选 SQL 与参考 SQL 比较 102,287 行数据上的结果集，不要求字符串相同；模型评测显式运行，不在 CI 偷用 Key。
 - **有界降级**：Redis 不可用时回落到最多 1,000 个内存会话；SQL 只纠错一次，避免无限 Agent 循环。
+- **编排边界**：当前是固定 LangGraph 工作流编排，模型负责结构化 SQL 与答案生成，不声称具备自主工具规划或开放式多 Agent 协作能力。
 
 
 ### 知识库文档（`ai-ecommerce-assistant/knowledge_base/`）
@@ -328,7 +330,7 @@ rag_tool_call_total 18
 
 | Workflow | 触发 | 职责 |
 |----------|------|------|
-| `.github/workflows/ci.yml` | PR / push main | AI 助手 107 项测试（Python 3.12 + 3.13）+ 后端 124 项测试（MySQL 8）+ Ruff + 编译 + 离线 Agent 评测 |
+| `.github/workflows/ci.yml` | PR / push main | AI 助手 107 项测试（Python 3.12 + 3.13）+ 后端 131 项测试（MySQL 8）+ Ruff + 编译 + 离线 Agent 评测；日志管道启用 `pipefail`，测试失败不会被 `tee` 掩盖 |
 | `.github/workflows/docker-smoke.yml` | PR / push main | 空卷构建全栈、断言 102,287 行、验证 7 个入口与 WebSocket 握手 |
 | `.github/workflows/release.yml` | push main / tag `v*.*.*` / 手动 | 构建 backend / streamlit / ai-assistant 三个 Docker 镜像，**多架构**（linux/amd64 + linux/arm64），推送到 `ghcr.io/super-zxq/ai-commerce-intelligence-platform-{backend,streamlit,ai-assistant}` |
 
@@ -427,10 +429,10 @@ docker compose pull && docker compose up -d
 
 ## 测试与评估
 
-### 自动化测试（231 项）
+### 自动化测试（238 项）
 
 ```bash
-# 后端（124 项，完整运行需要 MySQL）
+# 后端（131 项，完整运行需要 MySQL）
 python -m pytest backend/tests/ -v
 
 # AI/RAG（107 项）
@@ -464,8 +466,8 @@ python -m agent_core.evaluation
 ```
 
 - 路由集 100 条：25 条基础 SQL、20 条时间/聚合/同比/排序、15 条知识、15 条混合、15 条多轮/歧义、10 条安全问题。
-- RAG 集 15 条：报告 Recall@3 与 MRR；当前确定性基线为 Recall@3 100%、MRR 0.7444。
-- 当前路由规则评测为 100/100。它衡量确定性路由，不代表真实模型 SQL 或答案准确率。
+- 词法检索回归集 15 条：`agent_core` 的零外部服务检索器使用字符 bigram，报告 Recall@3 100%、MRR 0.7444；该数字**不是 BGE/Chroma 向量检索效果**。
+- 路由规则回归集为 100/100；多数类恒猜 `data` 的基线是 52/100，当前规则提升 48 个百分点。数据集与规则同仓维护，因此只用于防回归，不代表未见问题上的泛化准确率。
 
 ### 兼容 RAG 评估（20 条 gold_qa）
 
@@ -596,7 +598,7 @@ ai-commerce-intelligence-platform/
 | 缓存 | Redis 7 |
 | 反代 | Nginx |
 | 容器 | Docker + Docker Compose |
-| 测试 | pytest（124 项后端 + 107 项 AI/RAG）+ 100 条路由 + 15 条 RAG + 15 条 GLM 真实评测 |
+| 测试 | pytest（131 项后端 + 107 项 AI/RAG）+ 100 条路由回归 + 15 条词法检索回归 + 15 条 GLM 真实评测 |
 
 ## License
 
