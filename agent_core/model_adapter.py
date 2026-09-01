@@ -53,7 +53,7 @@ class OpenAIModelAdapter:
         previous_error: str | None,
     ) -> ModelResponse:
         source_context = "\n".join(f"{item.section}: {item.snippet}" for item in sources)
-        prompt = f"""你是只读电商 Text-to-SQL 模块。只返回结构化 sql 字段。
+        prompt = f"""你是只读电商 Text-to-SQL 模块。必须只输出 JSON 对象，固定格式为 {{"sql":"SELECT ..."}}。
 {self._business_context}
 
 表结构：
@@ -66,8 +66,14 @@ class OpenAIModelAdapter:
 用户问题：{query}
 上次脱敏错误：{previous_error or '无'}
 
-必须生成单条 SELECT/WITH 查询，不得写库，不得查询个人隐私。"""
-        response = await self._client().with_structured_output(_SQLPlan, include_raw=True).ainvoke(prompt)
+必须生成单条 SELECT/WITH 查询，不得写库，不得查询个人隐私；不要输出 Markdown 或 JSON 之外的文字。"""
+        # OpenAI 兼容提供方对 JSON Schema 的实现并不完全一致。显式使用
+        # JSON Mode，再交给 Pydantic 校验，避免模型返回 Markdown SQL。
+        response = await self._client().with_structured_output(
+            _SQLPlan,
+            method="json_mode",
+            include_raw=True,
+        ).ainvoke(prompt)
         parsed = response.get("parsed") if isinstance(response, dict) else None
         if parsed is None:
             raise ValueError("模型未返回合法的结构化 SQL")
@@ -100,7 +106,8 @@ class OpenAIModelAdapter:
 引用知识：{source_context or '无'}
 SQL：{sql or '未执行'}
 结果：{json.dumps(rows[:50], ensure_ascii=False)}
-若结果为空，请明确说明；引用知识时说明来源文件和章节。"""
+若结果为空，请明确说明。知识问答先用中文业务术语解释，再按需附公式；
+只要使用了引用知识，答案末尾必须使用“【来源】文件名 / 章节”列出至少一个实际来源。"""
         return _response(await self._client().ainvoke(prompt))
 
     def test_connection(self) -> None:

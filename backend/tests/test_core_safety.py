@@ -125,8 +125,8 @@ def test_ai_query_uses_database_column_aliases(monkeypatch):
 
     monkeypatch.setattr(
         ai_service,
-        "_get_sync_db",
-        lambda: SimpleNamespace(_engine=FakeEngine()),
+        "_get_sync_engine",
+        FakeEngine,
     )
     result = ai_service._execute_query_with_columns(
         "SELECT ROUND(1, 2) AS refund_rate, ROUND(3, 2) AS avg_order_value"

@@ -5,10 +5,11 @@ from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
 
-from langchain_community.utilities.sql_database import SQLDatabase
-from sqlalchemy import text
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Engine
 
 from agent_core import AgentRuntime
+from agent_core.db_schema import describe_table
 from agent_core.model_adapter import OpenAIModelAdapter
 from agent_core.rag import MarkdownKnowledgeRetriever
 from agent_core.session import FallbackConversationStore, MemoryConversationStore, RedisConversationStore
@@ -31,6 +32,10 @@ BUSINESS_CONTEXT = """## 数据时间范围
 - 退款率 = 退款订单数 / 总订单数
 - 复购率 = 消费2次及以上的用户数 / 总用户数
 - 客单价 = 总付款金额 / 总订单数
+- 数据起止日期仅用于解释“最近”问题；用户未指定时间时，禁止添加 order_time/order_date 条件或全年过滤
+- 订单量必须使用 COUNT(DISTINCT order_id)，禁止使用 COUNT(*)
+- 除非用户明确要求排除退款，否则销售额、订单量、用户数等指标包含退款订单
+- 用户明确指定月份或日期时必须严格使用该范围，不得扩大为全年
 
 ## 回答规则
 1. 始终先查看表结构确认列名，再编写 SQL
@@ -88,8 +93,7 @@ def _execute_query_with_columns(sql: str) -> list[dict]:
     if not is_read_only_sql(sql):
         raise ValueError("仅允许执行只读 SQL")
 
-    db = _get_sync_db()
-    with db._engine.connect() as connection:
+    with _get_sync_engine().connect() as connection:
         rows = connection.execute(text(sql)).mappings().all()
     return [
         {str(key): _json_safe_value(value) for key, value in row.items()}
@@ -98,20 +102,18 @@ def _execute_query_with_columns(sql: str) -> list[dict]:
 
 
 @lru_cache(maxsize=1)
-def _get_sync_db() -> SQLDatabase:
+def _get_sync_engine() -> Engine:
     # 优先使用只读账户（部署环境为 ea_ai）：即使只读黑名单被绕过也无法写库。
     # 连接串组件统一走 quote_plus，密码含 @:/ 等字符时不会被污染。
-    db = SQLDatabase.from_uri(
+    engine = create_engine(
         settings.ai_database_url,
-        engine_args={
-            "pool_pre_ping": True,
-            "pool_size": 3,
-            "max_overflow": 2,
-            "pool_recycle": 3600,
-        },
+        pool_pre_ping=True,
+        pool_size=3,
+        max_overflow=2,
+        pool_recycle=3600,
     )
-    guard_read_only_engine(db._engine)
-    return db
+    guard_read_only_engine(engine)
+    return engine
 
 
 _knowledge_retriever = MarkdownKnowledgeRetriever(
@@ -124,7 +126,7 @@ async def _runtime_retrieve(query: str):
 
 
 async def _runtime_schema() -> str:
-    return await asyncio.to_thread(_get_sync_db().get_table_info, ["orders"])
+    return await asyncio.to_thread(describe_table, _get_sync_engine(), "orders")
 
 
 async def _runtime_execute(sql: str) -> list[dict]:
