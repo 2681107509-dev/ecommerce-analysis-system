@@ -33,6 +33,16 @@
 | **系统监控** | `http://localhost/monitor` | 实时监控面板 |
 | **健康检查** | `http://localhost/health-panel` | 组件健康状态 |
 
+## 界面预览
+
+### AI 分析助手
+
+![AI 分析助手：模型连接、RAG、对话入口](docs/screenshots/ai-assistant.png)
+
+### BI 销售看板
+
+![BI 销售看板：核心指标、趋势和平台占比](docs/screenshots/bi-dashboard.png)
+
 ## 快速开始
 
 ### Docker Compose 一键部署（推荐）

@@ -205,7 +205,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("🤖 AI 智能商业分析平台")
-st.caption("基于 LangChain + DeepSeek 的 Text-to-SQL 智能查询 | 自然语言提问 → 自动生成 SQL → 数据可视化")
+st.caption("基于 LangGraph + RAG 的结构化 Text-to-SQL | 安全路由 → 只读查询 → 来源与轨迹可见")
 
 if "messages" not in st.session_state:
     st.session_state.messages = [
