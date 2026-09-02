@@ -83,7 +83,7 @@ app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
     description="""
-## AI Commerce Intelligence Platform API v1.0.0
+## AI Commerce Intelligence Platform API v1.0.3
 
 基于10万+电商订单数据，提供数据查询、分析、AI智能查询和数据导出功能。
 

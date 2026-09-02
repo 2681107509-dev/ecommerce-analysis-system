@@ -11,7 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from agent_core.rag import MarkdownKnowledgeRetriever
-from agent_core.workflow import AgentIntent, classify_intent
+from agent_core.models import AgentIntent
+from agent_core.routing import classify_intent
 
 DEFAULT_DATASET = Path(__file__).with_name("eval") / "agent_cases.jsonl"
 DEFAULT_RAG_DATASET = Path(__file__).with_name("eval") / "rag_cases.jsonl"

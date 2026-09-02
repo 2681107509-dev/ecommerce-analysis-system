@@ -1,8 +1,13 @@
+import logging
+
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
 from backend.config import get_settings
+from backend.utils.text_cleaner import sanitize_error
+
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
@@ -41,5 +46,6 @@ async def check_db_connection() -> bool:
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
         return True
-    except Exception:
+    except Exception as exc:
+        logger.error("数据库连接检查失败: %s", sanitize_error(exc))
         return False

@@ -3,10 +3,10 @@ FROM python:3.12-slim
 WORKDIR /app/ai-ecommerce-assistant
 
 COPY ai-ecommerce-assistant/requirements.txt .
-RUN --network=host python -m pip install --no-cache-dir --upgrade "pip>=26.1.2" \
+RUN --network=host python -m pip install --no-cache-dir --upgrade "pip>=26.1.2" "setuptools>=83.0.0" \
     && pip install --no-cache-dir \
         --index-url https://download.pytorch.org/whl/cpu \
-        "torch==2.12.1+cpu" \
+        "torch==2.13.0+cpu" \
     && pip install --no-cache-dir -r requirements.txt
 
 COPY backend/ /app/backend/

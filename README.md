@@ -339,7 +339,7 @@ rag_tool_call_total 18
 | 触发 | tag 示例 |
 |------|----------|
 | push main | `:latest`、`:main-<short-sha>` |
-| push tag `v1.0.0` | `:v1.0.0`、`:v1.0`、`:latest` |
+| push tag `v1.0.3` | `:1.0.3`、`:1.0`、`:latest` |
 | pull request | `:pr-123`（不推送） |
 | workflow_dispatch | `:latest`、`:main-<short-sha>` |
 
@@ -348,7 +348,7 @@ rag_tool_call_total 18
 ```yaml
 services:
   backend:
-    image: ghcr.io/super-zxq/ai-commerce-intelligence-platform-backend:v1.0.0
+    image: ghcr.io/super-zxq/ai-commerce-intelligence-platform-backend:1.0.3
     # ... 其余配置不变
 ```
 
@@ -420,8 +420,8 @@ git commit -m "feat: xxxxx"
 git push origin main
 
 # 3. CI 通过后打 tag（触发镜像构建 + 推送 ghcr.io）
-git tag v1.0.1
-git push origin v1.0.1
+git tag v1.0.3
+git push origin v1.0.3
 
 # 4. 生产拉新镜像
 docker compose pull && docker compose up -d
@@ -441,7 +441,7 @@ python -m pytest ai-ecommerce-assistant/tests/ -v
 
 **测试覆盖：**
 - `test_agent_runtime_core.py` — 分支工具顺序、SQL AST、一次重试、用户会话隔离、Redis 降级、Token `null` 语义和 API 兼容
-- `test_agent_workflow.py` / `test_agent_evaluation.py` — 安全短路、意图路由和离线发布门槛
+- `test_agent_workflow.py` / `test_agent_evaluation.py` — 意图路由和离线发布门槛；安全短路与工具顺序由 Runtime 测试覆盖
 - `test_live_model_evaluation.py` — 真实评测集约束、结果集比较与共享 Schema 描述
 - `test_rag_prompts.py` — 提示词模板（工具说明、决策树、回答模板）
 - `test_rag_tools.py` — sentinel 序列化 + Tool 工厂（空命中/异常/正常）
@@ -457,7 +457,7 @@ AI/RAG 测试不依赖真实 BGE 模型，用 `tests/conftest.py` 里的 `FakeEm
 
 - LLM 生成 SQL 在显式执行和 SQLAlchemy Engine 执行前都会经过单语句只读校验，拦截写操作、文件读取/导出、存储过程和延时函数。
 - Docker 镜像构建时升级到 `pip>=26.1.2`；Embedding 依赖使用 `transformers 5.x`，避开已知的 4.x checkpoint 反序列化漏洞。
-- Chroma 仅以嵌入式本地库运行，不启动或暴露 Chroma Server API。当前 Chroma 最新版存在一个仅影响远程 Server API 的未修复公告，因此不要额外对外启动 Chroma HTTP 服务。
+- Chroma 仅以嵌入式本地库运行，不启动或暴露 Chroma Server API。当前 1.5.9 的四项未修复公告均要求攻击者访问 Server API（含认证、租户权限或集合更新端点），在本部署中不可达；不要额外启动 Chroma HTTP 服务。
 
 ### 离线 Agent 评测（不调用付费模型）
 
@@ -514,6 +514,7 @@ python eval/run_eval.py --report eval/my_report.md
 ai-commerce-intelligence-platform/
 ├── agent_core/                   # FastAPI / Streamlit 共享 Agent Runtime
 │   ├── runtime.py                # LangGraph 分节点工作流
+│   ├── routing.py                # 确定性意图路由
 │   ├── model_adapter.py          # 结构化模型适配
 │   ├── live_evaluation.py        # 显式联网的真实模型评测器
 │   ├── session.py                # Redis / 内存会话
