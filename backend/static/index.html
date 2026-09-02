@@ -4,8 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AI Commerce Intelligence Platform — 一次提问，看它如何变成一次安全的数据查询</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Manrope:wght@700;800&family=Noto+Sans+SC:wght@400;500;700;800&display=swap" rel="stylesheet">
 <style>
-/* ===== 设计令牌（克制版 AI Runtime + 企业级数据工作台）===== */
+/* ===== 设计令牌（克制版 AI Runtime + 数据工作台）===== */
 :root {
     --bg: #0B0D10;
     --surface: #13171D;
@@ -21,7 +24,7 @@
     --orange: #F97316;    /* 安全防护 */
     --green: #22C55E;     /* 完成 / 在线 */
     --mono: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
-    --sans: "Noto Sans SC", -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    --sans: "Manrope", "Noto Sans SC", -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html { scroll-behavior: smooth; overflow-x: hidden; }
@@ -41,8 +44,7 @@ code, pre, .mono { font-family: var(--mono); }
     position: sticky; top: 0; z-index: 50;
     display: flex; align-items: center; gap: 16px;
     padding: 0 24px; height: 52px;
-    background: rgba(11, 13, 16, 0.88);
-    backdrop-filter: blur(10px);
+    background: rgba(11, 13, 16, 0.96);
     border-bottom: 1px solid var(--line);
 }
 .topbar .brand {
@@ -81,26 +83,11 @@ code, pre, .mono { font-family: var(--mono); }
 /* ===== 布局容器 ===== */
 .wrap { max-width: 1180px; margin: 0 auto; padding: 0 24px; }
 section { padding: 72px 0; }
-.section-label {
-    font-family: var(--mono); font-size: 12px;
-    color: var(--teal); letter-spacing: 2px;
-    text-transform: uppercase; margin-bottom: 10px;
-}
 .section-title { font-size: 28px; font-weight: 800; letter-spacing: -0.5px; margin-bottom: 14px; }
 .section-sub { color: var(--ink-2); font-size: 15px; max-width: 640px; }
 
 /* ===== Hero ===== */
 .hero { padding: 84px 0 56px; }
-.hero-eyebrow {
-    display: inline-flex; align-items: center; gap: 8px;
-    font-family: var(--mono); font-size: 12px; color: var(--ink-2);
-    border: 1px solid var(--line); border-radius: 999px;
-    padding: 5px 14px; margin-bottom: 26px;
-}
-.hero-eyebrow .live {
-    width: 7px; height: 7px; border-radius: 50%;
-    background: var(--green);
-}
 .hero h1 {
     font-size: clamp(30px, 4.6vw, 52px);
     font-weight: 800; letter-spacing: -1.2px; line-height: 1.18;
@@ -143,7 +130,9 @@ section { padding: 72px 0; }
     font-size: 13px; color: var(--ink-3);
 }
 .hero-points span::before {
-    content: "▸"; color: var(--teal); margin-right: 6px;
+    content: ""; display: inline-block;
+    width: 5px; height: 5px; background: var(--teal);
+    margin-right: 8px; vertical-align: 2px;
 }
 
 /* ===== 调试器窗口 ===== */
@@ -493,7 +482,6 @@ section { padding: 72px 0; }
 
 <!-- ================= Hero ================= -->
 <section class="hero">
-    <div class="hero-eyebrow"><span class="live"></span>共享 Agent Runtime · LangGraph · 10 节点流水线</div>
     <h1>一句中文提问，<br>看它如何经过<span class="hl-safe">安全检查</span>、<span class="hl-rag">知识检索</span>与 <span class="hl-sql">SQL 生成</span>，变成一次可审计的数据查询。</h1>
     <p class="sub">这不是聊天框套壳。下方是一个真实的「单步调试器」：它展示本平台 Agent 在 LangGraph 中运行的 10 个节点，每一步的意图、SQL、来源与耗时都可检查——节点名与执行顺序直接来自 <code>agent_core/runtime.py</code>。</p>
     <div class="speed-read">
@@ -514,7 +502,6 @@ section { padding: 72px 0; }
 
 <!-- ================= 单步调试器 ================= -->
 <section id="debugger">
-    <div class="section-label">Step-Through Debugger</div>
     <h2 class="section-title">把 Agent 当程序来调试</h2>
     <p class="section-sub">点击「单步」逐节点推进，或「自动播放」按真实执行顺序走一遍。当前节点右侧显示该步的意图、SQL、来源与用量。</p>
 
@@ -577,7 +564,6 @@ section { padding: 72px 0; }
 
 <!-- ================= 指标观察窗 ================= -->
 <section>
-    <div class="section-label">Watch Window</div>
     <h2 class="section-title">只放能复核的数字</h2>
     <p class="section-sub">每个指标都标注了来源。无法在仓库或 CI 中复核的数字，本页一律不写。</p>
     <div class="metrics-grid">
@@ -611,7 +597,6 @@ section { padding: 72px 0; }
 
 <!-- ================= 真实问题帧 ================= -->
 <section>
-    <div class="section-label">Real Query Frames</div>
     <h2 class="section-title">四种真实意图，四条真实路径</h2>
     <p class="section-sub">路由是确定性的：同一类问题永远走同一条路径。安全拦截发生在任何 LLM 调用之前。</p>
     <div class="frames-grid">
@@ -640,7 +625,6 @@ section { padding: 72px 0; }
 
 <!-- ================= 四层防护 ================= -->
 <section>
-    <div class="section-label">SQL Safety</div>
     <h2 class="section-title">SQL 安全的四道防线</h2>
     <p class="section-sub">LLM 生成的每一条 SQL，都必须活着通过这四层才会碰到数据。</p>
     <div class="guard-grid">
@@ -669,7 +653,6 @@ section { padding: 72px 0; }
 
 <!-- ================= 评测证据 ================= -->
 <section>
-    <div class="section-label">Evaluation Evidence</div>
     <h2 class="section-title">评测是断言结果集，不是感觉</h2>
     <p class="section-sub">端到端评测对查询结果集做断言（行数、列、关键值），而非检查「回答读起来对不对」。</p>
     <table class="eval-table">
@@ -707,9 +690,8 @@ section { padding: 72px 0; }
 
 <!-- ================= BI 与 RFM ================= -->
 <section>
-    <div class="section-label">Operate Surface</div>
     <h2 class="section-title">同一份数据，另一副面孔：BI 看板</h2>
-    <p class="section-sub">首页负责「说服」，看板负责「干活」。BI 侧是浅色企业级工作台：销售总览、趋势、平台占比与 RFM 八层客户分层（Streamlit + Plotly）。</p>
+    <p class="section-sub">首页负责「说服」，看板负责「干活」。BI 侧是浅色数据工作台：销售总览、趋势、平台占比与 RFM 八层客户分层（Streamlit + Plotly）。</p>
     <div class="rfm-strip">
         <span class="rfm-chip"><i style="background:#1565C0"></i>重要价值客户</span>
         <span class="rfm-chip"><i style="background:#1E88E5"></i>重要发展客户</span>
@@ -727,7 +709,6 @@ section { padding: 72px 0; }
 
 <!-- ================= 架构 ================= -->
 <section>
-    <div class="section-label">Architecture</div>
     <h2 class="section-title">一套 Runtime，两个前端</h2>
     <div class="arch-box rise"><span class="c-dim"># Nginx :80 统一入口</span>
 /          → <span class="c-blue">FastAPI</span>  ← 本页（作品集门面）
@@ -746,7 +727,6 @@ MySQL 8（只读账号） · Redis 7（缓存/会话） · Chroma + BGE-small-zh
 
 <!-- ================= 全部入口 ================= -->
 <section>
-    <div class="section-label">All Entries</div>
     <h2 class="section-title">全部入口</h2>
     <div class="entry-grid">
         <a class="entry-card rise" href="/BI/" target="_blank">
@@ -784,7 +764,6 @@ MySQL 8（只读账号） · Redis 7（缓存/会话） · Chroma + BGE-small-zh
 
 <!-- ================= 本地运行 ================= -->
 <section>
-    <div class="section-label">Run It Yourself</div>
     <h2 class="section-title">本地跑起来</h2>
     <div class="run-steps">
         <div class="run-step">
