@@ -339,7 +339,7 @@ rag_tool_call_total 18
 | 触发 | tag 示例 |
 |------|----------|
 | push main | `:latest`、`:main-<short-sha>` |
-| push tag `v1.0.3` | `:v1.0.3`、`:v1.0`、`:latest` |
+| push tag `v1.0.3` | `:1.0.3`、`:1.0`、`:latest` |
 | pull request | `:pr-123`（不推送） |
 | workflow_dispatch | `:latest`、`:main-<short-sha>` |
 
@@ -348,7 +348,7 @@ rag_tool_call_total 18
 ```yaml
 services:
   backend:
-    image: ghcr.io/super-zxq/ai-commerce-intelligence-platform-backend:v1.0.3
+    image: ghcr.io/super-zxq/ai-commerce-intelligence-platform-backend:1.0.3
     # ... 其余配置不变
 ```
 
