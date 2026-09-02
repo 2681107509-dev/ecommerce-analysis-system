@@ -172,15 +172,14 @@ st.markdown("""
     h1, h2, h3 { color: var(--ink); letter-spacing: -.02em; }
     .stButton > button { border-radius: 10px; border-color: #CBD5E1; }
     .step-indicator {
-        display: flex; gap: 8px; align-items: center;
+        display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
         padding: 12px 16px; border-radius: 8px;
         background: #EFF6FF; border: 1px solid #DBEAFE; margin-bottom: 12px;
     }
     .step-item { font-size: 14px; }
     .step-done { color: #16A34A; }
     .step-active { color: #1565C0; font-weight: 700; }
-    .step-pending { color: #94A3B8; }
-    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
+    .step-error { color: #DC2626; font-weight: 700; }
     .highlight-num { color: #1565C0; font-weight: 700; font-size: 1.1em; }
     .warning-box {
         background: rgba(234,179,8,0.1); border-left: 4px solid #EAB308;
@@ -336,7 +335,7 @@ def get_session_runtime(_engine, _retriever):
         schema_loader=load_schema,
         sql_generator=model_adapter.generate_sql,
         sql_executor=execute_sql,
-        answer_generator=model_adapter.answer,
+        answer_generator=model_adapter.astream_answer,
         conversations=MemoryConversationStore(ttl_seconds=1800, max_sessions=1, max_turns=6),
         sql_timeout_seconds=10,
         # get_db_uri() 在无 MySQL 环境会回落到 SQLite，方言必须按实际连接串判断。
@@ -766,26 +765,36 @@ def run_sql_query(sql: str) -> pd.DataFrame | None:
         return None
 
 
-def show_step_progress(steps_done: int):
-    steps = [
-        ("🔍 解析意图", 1),
-        ("📊 生成 SQL", 2),
-        ("✅ 查库完成", 3),
-        ("🤖 总结结论", 4),
-    ]
-    html_parts = ['<div class="step-indicator">']
-    for label, step_num in steps:
-        if step_num < steps_done:
-            css_class = "step-done"
-        elif step_num == steps_done:
-            css_class = "step-active"
+# 节点名 → 进度条文案；执行轨迹面板仍显示英文节点名与耗时明细。
+STEP_LABELS = {
+    "input_safety": "🔒 输入安全检查",
+    "load_history": "📜 加载会话",
+    "route": "🔍 解析意图",
+    "retrieve": "📚 检索知识",
+    "load_schema": "🗂️ 读取表结构",
+    "generate_sql": "📝 生成 SQL",
+    "validate_sql": "🛡️ 校验 SQL",
+    "execute_sql": "🗄️ 执行查询",
+    "synthesize": "🤖 合成回答",
+    "save_session": "💾 保存会话",
+}
+
+
+def render_live_steps(steps: list[dict]) -> str:
+    """把 runtime.astream 实时产出的节点步骤渲染为进度条（复用 step-indicator 样式）。"""
+    parts = ['<div class="step-indicator">']
+    for index, step in enumerate(steps):
+        label = STEP_LABELS.get(step.get("name", ""), step.get("name", "步骤"))
+        if step.get("status") == "error":
+            # 错误步骤红色高亮并加 ⚠️ 前缀
+            label = f"⚠️ {label}"
+            css_class = "step-error"
         else:
-            css_class = "step-pending"
-        html_parts.append(f'<span class="step-item {css_class}">{label}</span>')
-        if step_num < 4:
-            html_parts.append('<span class="step-pending">→</span>')
-    html_parts.append('</div>')
-    return ''.join(html_parts)
+            # 最后一项视为"当前步骤"高亮，其余标记已完成。
+            css_class = "step-active" if index == len(steps) - 1 else "step-done"
+        parts.append(f'<span class="step-item {css_class}">{label}</span>')
+    parts.append('</div>')
+    return ''.join(parts)
 
 
 def render_sql_block(sql: str, query_time: float | None = None):
@@ -1190,17 +1199,28 @@ if prompt:
 
     with st.chat_message("assistant"):
         step_placeholder = st.empty()
-        step_placeholder.markdown(show_step_progress(1), unsafe_allow_html=True)
+        answer_placeholder = st.empty()
+        live_steps: list[dict] = []
+        answer_text: list[str] = []
 
-        time.sleep(0.3)
-        step_placeholder.markdown(show_step_progress(2), unsafe_allow_html=True)
+        def _on_step(step: dict) -> None:
+            # 节点完成即刷新实时进度；回调与 Streamlit 脚本同线程，可直接更新 UI。
+            live_steps.append(step)
+            step_placeholder.markdown(render_live_steps(live_steps), unsafe_allow_html=True)
+
+        def _on_token(delta: str) -> None:
+            # 答案逐 token 打字机渲染
+            answer_text.append(delta)
+            answer_placeholder.markdown("".join(answer_text) + "▌")
 
         try:
             state = asyncio.run(
-                runtime.invoke(
+                runtime.astream(
                     prompt,
                     owner="streamlit-session",
                     thread_id=st.session_state.thread_id,
+                    on_step=_on_step,
+                    on_token=_on_token,
                 )
             )
             agent_result = state["result"]
@@ -1228,6 +1248,7 @@ if prompt:
             ]
         except Exception as exc:
             step_placeholder.empty()
+            answer_placeholder.empty()
             st.error(f"⚠️ 执行出错：{sanitize_error(exc)}")
             st.session_state.messages.append({
                 "role": "assistant",
@@ -1237,12 +1258,9 @@ if prompt:
             })
             st.stop()
 
-
-        step_placeholder.markdown(show_step_progress(3), unsafe_allow_html=True)
-        time.sleep(0.2)
-        step_placeholder.markdown(show_step_progress(4), unsafe_allow_html=True)
-        time.sleep(0.2)
+        # 流式渲染结束：清空占位（含打字机光标），改用高亮版最终答案。
         step_placeholder.empty()
+        answer_placeholder.empty()
 
         chart_data = None
         chart_title = prompt[:30]

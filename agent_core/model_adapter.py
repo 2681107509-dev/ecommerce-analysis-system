@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from agent_core.models import AgentIntent, AgentSource, ModelResponse
 from agent_core.session import Message
+from agent_core.streaming import emit_token
 
 
 class _SQLPlan(BaseModel):
@@ -32,7 +33,7 @@ class OpenAIModelAdapter:
         self._model = model
         self._business_context = business_context
 
-    def _client(self) -> ChatOpenAI:
+    def _client(self, *, stream_usage: bool = False) -> ChatOpenAI:
         if not self._api_key:
             raise RuntimeError("模型未配置")
         return ChatOpenAI(
@@ -42,6 +43,7 @@ class OpenAIModelAdapter:
             temperature=0,
             timeout=120,
             max_retries=1,
+            stream_usage=stream_usage,
         )
 
     async def generate_sql(
@@ -82,6 +84,28 @@ class OpenAIModelAdapter:
         model_response.content = parsed.sql
         return model_response
 
+    def _answer_prompt(
+        self,
+        query: str,
+        intent: AgentIntent,
+        history: list[Message],
+        sources: list[AgentSource],
+        sql: str | None,
+        rows: list[dict],
+    ) -> str:
+        source_context = "\n".join(
+            f"[{item.filename} / {item.section}] {item.snippet}" for item in sources
+        )
+        return f"""你是电商数据分析助手。根据已验证的工具结果用中文简洁回答，不得编造。
+问题：{query}
+意图：{intent}
+最近会话：{json.dumps(history[-6:], ensure_ascii=False)}
+引用知识：{source_context or '无'}
+SQL：{sql or '未执行'}
+结果：{json.dumps(rows[:50], ensure_ascii=False)}
+若结果为空，请明确说明。知识问答先用中文业务术语解释，再按需附公式；
+只要使用了引用知识，答案末尾必须使用“【来源】文件名 / 章节”列出至少一个实际来源。"""
+
     async def answer(
         self,
         query: str,
@@ -96,19 +120,43 @@ class OpenAIModelAdapter:
                 summary = "\n".join(f"- {item.section}：{item.snippet}" for item in sources)
                 return ModelResponse(f"当前未配置模型，已返回最相关的业务知识：\n{summary}")
             return ModelResponse("⚠️ AI功能未配置，请配置模型 API Key。")
-        source_context = "\n".join(
-            f"[{item.filename} / {item.section}] {item.snippet}" for item in sources
-        )
-        prompt = f"""你是电商数据分析助手。根据已验证的工具结果用中文简洁回答，不得编造。
-问题：{query}
-意图：{intent}
-最近会话：{json.dumps(history[-6:], ensure_ascii=False)}
-引用知识：{source_context or '无'}
-SQL：{sql or '未执行'}
-结果：{json.dumps(rows[:50], ensure_ascii=False)}
-若结果为空，请明确说明。知识问答先用中文业务术语解释，再按需附公式；
-只要使用了引用知识，答案末尾必须使用“【来源】文件名 / 章节”列出至少一个实际来源。"""
+        prompt = self._answer_prompt(query, intent, history, sources, sql, rows)
         return _response(await self._client().ainvoke(prompt))
+
+    async def astream_answer(
+        self,
+        query: str,
+        intent: AgentIntent,
+        history: list[Message],
+        sources: list[AgentSource],
+        sql: str | None,
+        rows: list[dict],
+    ) -> ModelResponse:
+        """流式版 answer：增量经 agent_core.streaming.emit_token 转发。
+
+        未设置 token 钩子（如非流式调用方）时行为与 answer 等价，
+        因此可作为 answer_generator 直接注入 Runtime。
+        """
+        if not self._api_key:
+            return await self.answer(query, intent, history, sources, sql, rows)
+        prompt = self._answer_prompt(query, intent, history, sources, sql, rows)
+        chunks: list[str] = []
+        usage: dict = {}
+        # stream_usage=True 让最后一个 chunk 携带 usage_metadata，token 统计与 answer 对齐。
+        async for chunk in self._client(stream_usage=True).astream(prompt):
+            delta = chunk.content if isinstance(chunk.content, str) else ""
+            if delta:
+                chunks.append(delta)
+                emit_token(delta)
+            meta = getattr(chunk, "usage_metadata", None)
+            if meta:
+                usage = meta
+        return ModelResponse(
+            content="".join(chunks),
+            input_tokens=usage.get("input_tokens"),
+            output_tokens=usage.get("output_tokens"),
+            total_tokens=usage.get("total_tokens"),
+        )
 
     def test_connection(self) -> None:
         if not self._api_key:
