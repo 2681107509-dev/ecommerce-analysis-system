@@ -18,3 +18,4 @@ transformers==5.12.1
 torch==2.13.0
 setuptools==83.0.0
 httpx==0.28.1
+msgpack==1.2.2
