@@ -1,4 +1,4 @@
-# 企业级RFM分层页面 v3.0 | 符合CDP数据产品规范
+# RFM 分层页面 v3.0 | 符合 CDP 数据产品规范
 import os
 from datetime import UTC, datetime
 
@@ -15,12 +15,43 @@ from backend.utils.rfm_scoring import assign_segment, quantile_scores
 # ══════════════════════════════════════════════════════════════
 _PLOTLY_LAYOUT_DEFAULTS = {
     "template": "plotly_white",
-    "font": {"family": "Microsoft YaHei, PingFang SC, sans-serif", "size": 13, "color": '#334155'},
+    "font": {
+        "family": "Manrope, Noto Sans SC, Microsoft YaHei, sans-serif",
+        "size": 13,
+        "color": "#334155",
+    },
     "paper_bgcolor": "rgba(0,0,0,0)",
-    "plot_bgcolor": '#FFFFFF',
-    "xaxis": {"gridcolor": "#E2E8F0", "zerolinecolor": "#CBD5E1"},
-    "yaxis": {"gridcolor": "#E2E8F0", "zerolinecolor": "#CBD5E1"},
+    "plot_bgcolor": "#FFFFFF",
+    "colorway": ["#1565C0", "#14B8A6", "#F97316", "#8B5CF6", "#64748B"],
+    "hoverlabel": {
+        "bgcolor": "#0F172A",
+        "bordercolor": "#0F172A",
+        "font": {
+            "family": "Manrope, Noto Sans SC, Microsoft YaHei, sans-serif",
+            "size": 12,
+            "color": "#F8FAFC",
+        },
+    },
+    "xaxis": {
+        "gridcolor": "#E2E8F0",
+        "zerolinecolor": "#CBD5E1",
+        "linecolor": "#CBD5E1",
+        "ticks": "outside",
+        "tickfont": {"size": 11, "color": "#64748B"},
+    },
+    "yaxis": {
+        "gridcolor": "#E2E8F0",
+        "zerolinecolor": "#CBD5E1",
+        "linecolor": "#CBD5E1",
+        "ticks": "outside",
+        "tickfont": {"size": 11, "color": "#64748B"},
+    },
 }
+
+# 非 RFM 图表的受控色板；RFM 图表继续使用下方既有八分层色。
+_CHART_SEQUENCE = ["#1565C0", "#14B8A6", "#F97316", "#8B5CF6", "#64748B"]
+_BLUE_SCALE = [[0, "#EFF6FF"], [0.45, "#93C5FD"], [1, "#1565C0"]]
+_TEAL_SCALE = [[0, "#F0FDFA"], [0.45, "#5EEAD4"], [1, "#0F766E"]]
 
 # 企业标准色
 ENTERPRISE_COLORS = {
@@ -46,30 +77,236 @@ def _hex_to_rgba(hex_color: str, alpha: float = 0.8) -> str:
     r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
     return f"rgba({r},{g},{b},{alpha})"
 
+
+def _format_currency_cn(amount: float) -> str:
+    """将大额金额转换为中文业务读法，避免指标卡溢出。"""
+    if abs(amount) >= 100_000_000:
+        return f"{amount / 100_000_000:.2f} 亿元"
+    if abs(amount) >= 10_000:
+        return f"{amount / 10_000:.2f} 万元"
+    return f"{amount:,.2f} 元"
+
+
 st.set_page_config(
     page_title="AI Commerce Intelligence Platform",
-    page_icon="🛒",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 st.markdown("""
 <style>
-    :root { --brand: #1565C0; --ink: #0F172A; --muted: #64748B; --surface: #FFFFFF; }
-    .stApp { background: #F6F8FC; color: var(--ink); }
-    .block-container { max-width: 1440px; padding-top: 2rem; padding-bottom: 3rem; }
-    [data-testid="stHeader"] { background: rgba(246, 248, 252, .8); }
-    [data-testid="stSidebar"] { background: #EEF2F7; border-right: 1px solid #E2E8F0; color: var(--ink); }
-    [data-testid="stMetric"] {
-        background: var(--surface); border: 1px solid #E2E8F0; border-radius: 14px;
-        padding: 1rem 1.1rem; box-shadow: 0 5px 18px rgba(15, 23, 42, .04);
+    @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;600;700&display=swap');
+
+    :root {
+        --brand: #1565C0;
+        --teal: #14B8A6;
+        --orange: #F97316;
+        --purple: #8B5CF6;
+        --green: #22C55E;
+        --bg: #F6F8FC;
+        --surface: #FFFFFF;
+        --surface-2: #F8FAFC;
+        --sidebar: #EEF2F7;
+        --line: #E2E8F0;
+        --line-strong: #CBD5E1;
+        --ink: #0F172A;
+        --ink-2: #475569;
+        --muted: #64748B;
+        --sans: "Manrope", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+        --mono: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
     }
-    [data-testid="stMetricLabel"] p { color: var(--muted); }
-    [data-testid="stMetricValue"] { color: var(--ink); }
-    h1, h2, h3 { color: var(--ink); letter-spacing: -.02em; }
-    div[data-testid="stAlert"] { border-radius: 12px; }
-    .stTabs [data-baseweb="tab-list"] { gap: 1.25rem; border-bottom: 1px solid #E2E8F0; }
-    .stTabs [aria-selected="true"] { color: var(--brand); }
+
+    html, body, [class*="css"] {
+        font-family: var(--sans);
+    }
+    .stApp {
+        background: var(--bg);
+        color: var(--ink);
+    }
+    .block-container {
+        max-width: 1440px;
+        padding-top: 2.1rem;
+        padding-bottom: 3.5rem;
+        padding-left: 2.25rem;
+        padding-right: 2.25rem;
+    }
+    [data-testid="stHeader"] {
+        background: var(--bg);
+        border-bottom: 1px solid var(--line);
+    }
+    [data-testid="stSidebar"] {
+        background: var(--sidebar);
+        border-right: 1px solid var(--line);
+        color: var(--ink);
+    }
+    [data-testid="stSidebar"] > div:first-child {
+        padding-top: 2rem;
+    }
+    [data-testid="stSidebar"] h1,
+    [data-testid="stSidebar"] h2,
+    [data-testid="stSidebar"] h3 {
+        font-size: 15px;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+    }
+    [data-testid="stSidebar"] label p {
+        color: var(--ink-2);
+        font-size: 13px;
+        font-weight: 600;
+    }
+
+    h1, h2, h3 {
+        color: var(--ink);
+        font-family: var(--sans);
+        letter-spacing: -0.03em;
+    }
+    h1 {
+        font-size: 30px !important;
+        font-weight: 800 !important;
+        line-height: 1.25 !important;
+        padding-bottom: 0.35rem;
+    }
+    h2 {
+        font-size: 22px !important;
+        font-weight: 800 !important;
+        line-height: 1.35 !important;
+        margin-top: 0.25rem;
+    }
+    h3, h4, h5 {
+        font-weight: 700 !important;
+        line-height: 1.4 !important;
+    }
+    p, li {
+        color: var(--ink-2);
+    }
+    hr {
+        margin: 1.35rem 0;
+        border-color: var(--line);
+    }
+    code, pre {
+        font-family: var(--mono);
+        font-variant-numeric: tabular-nums;
+    }
+    [data-testid="stCaptionContainer"] {
+        color: var(--muted);
+    }
+
+    [data-testid="stMetric"] {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 16px 18px;
+        box-shadow: none;
+        min-height: 118px;
+    }
+    [data-testid="stMetricLabel"] p {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+    }
+    [data-testid="stMetricValue"] {
+        color: var(--ink);
+        font-family: var(--mono);
+        font-size: 30px !important;
+        font-weight: 700;
+        letter-spacing: -0.04em;
+        font-variant-numeric: tabular-nums;
+    }
+    [data-testid="stMetricDelta"] {
+        font-family: var(--mono);
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+    }
+
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 0.5rem;
+        border-bottom: 1px solid var(--line);
+        margin-bottom: 1rem;
+    }
+    .stTabs [data-baseweb="tab"] {
+        height: 40px;
+        padding: 0 14px;
+        border-radius: 8px 8px 0 0;
+        color: var(--muted);
+        font-weight: 700;
+    }
+    .stTabs [data-baseweb="tab"]:hover {
+        background: var(--surface-2);
+        color: var(--ink);
+    }
+    .stTabs [aria-selected="true"] {
+        color: var(--brand);
+        background: var(--surface);
+    }
+
+    [data-testid="stDataFrame"],
+    [data-testid="stTable"] {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        overflow: hidden;
+    }
+    [data-testid="stDataFrame"] *,
+    [data-testid="stTable"] * {
+        font-variant-numeric: tabular-nums;
+    }
+    [data-testid="stExpander"] {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        overflow: hidden;
+    }
+    [data-testid="stExpander"] summary {
+        font-weight: 700;
+        color: var(--ink);
+    }
+    div[data-testid="stAlert"] {
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        box-shadow: none;
+    }
+
+    .stButton > button,
+    .stDownloadButton > button {
+        border-radius: 8px;
+        border: 1px solid var(--line-strong);
+        background: var(--surface);
+        color: var(--ink);
+        font-weight: 700;
+        box-shadow: none;
+    }
+    .stButton > button:hover,
+    .stDownloadButton > button:hover {
+        border-color: var(--brand);
+        color: var(--brand);
+        background: var(--surface);
+    }
+    .stButton > button:focus,
+    .stDownloadButton > button:focus {
+        box-shadow: 0 0 0 2px rgba(21, 101, 192, 0.16);
+    }
+
+    [data-baseweb="select"] > div,
+    .stDateInput input,
+    .stTextInput input {
+        border-radius: 8px !important;
+        border-color: var(--line) !important;
+        background: var(--surface) !important;
+    }
+    .stSlider [data-baseweb="slider"] {
+        padding-bottom: 8px;
+    }
+
+    @media (max-width: 760px) {
+        .block-container {
+            padding-left: 1rem;
+            padding-right: 1rem;
+            padding-top: 1.4rem;
+        }
+        h1 { font-size: 26px !important; }
+        [data-testid="stMetric"] { min-height: 0; }
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -91,24 +328,24 @@ def load_data():
             return pd.read_csv(f, parse_dates=['下单时间', '付款时间'])
     raise FileNotFoundError("未找到数据文件 data/cleaned_orders.parquet 或 .csv")
 
-with st.spinner("⏳ 正在加载数据..."):
+with st.spinner("正在加载数据..."):
     try:
         df = load_data()
-        st.success(f"✅ 成功加载 {len(df):,} 条订单数据")
+        st.success(f"成功加载 {len(df):,} 条订单数据")
     except Exception as e:
-        st.error(f"❌ 数据加载失败：{e}")
+        st.error(f"数据加载失败：{e}")
         st.stop()
 
-page = st.sidebar.selectbox("📋 选择看板页面", ["📊 销售总览", "👥 RFM 客户分层"])
+page = st.sidebar.selectbox("选择看板页面", ["销售总览", "RFM 客户分层"])
 
 # ══════════════════════════════════════════════════════════════
 # 销售总览
 # ══════════════════════════════════════════════════════════════
-if page == "📊 销售总览":
-    st.title("🛒 AI 智能商业分析平台")
+if page == "销售总览":
+    st.title("AI 智能商业分析平台")
     st.markdown("---")
 
-    st.sidebar.header("🔍 筛选条件")
+    st.sidebar.header("筛选条件")
     platforms = st.sidebar.multiselect("选择平台", options=df['平台类型'].unique(), default=df['平台类型'].unique())
     min_date = df['下单时间'].min().date()
     max_date = df['下单时间'].max().date()
@@ -121,7 +358,7 @@ if page == "📊 销售总览":
     else:
         filtered_df = df[df['平台类型'].isin(platforms)].copy()
 
-    st.subheader("📊 核心指标")
+    st.subheader("核心指标")
     col1, col2, col3, col4 = st.columns(4)
     total_sales = filtered_df['付款金额'].sum()
     total_orders = filtered_df['订单号'].nunique()
@@ -135,41 +372,41 @@ if page == "📊 销售总览":
     overall_unique_users = df['用户名'].nunique()
     overall_avg = df['付款金额'].mean() if len(df) > 0 else 0
 
-    col1.metric(label="💰 总销售额", value=f"{total_sales:,.2f} 元", delta=f"{daily_avg_sales:,.0f} 元/天")
-    col2.metric(label="📦 总订单数", value=f"{total_orders:,}", delta=f"平均每用户 {total_orders/total_users:.1f} 单" if total_users > 0 else "0")
-    col3.metric(label="👥 活跃用户", value=f"{total_users:,}", delta=f"占比 {total_users/overall_unique_users*100:.1f}%" if overall_unique_users > 0 else "0%")
-    col4.metric(label="💵 客单价", value=f"{avg_order_value:.2f} 元", delta="较总体" + ("↑" if avg_order_value > overall_avg else "↓"))
+    col1.metric(label="总销售额", value=_format_currency_cn(total_sales), delta=f"{daily_avg_sales:,.0f} 元/天")
+    col2.metric(label="总订单数", value=f"{total_orders:,}", delta=f"平均每用户 {total_orders/total_users:.1f} 单" if total_users > 0 else "0")
+    col3.metric(label="活跃用户", value=f"{total_users:,}", delta=f"占比 {total_users/overall_unique_users*100:.1f}%" if overall_unique_users > 0 else "0%")
+    col4.metric(label="客单价", value=f"{avg_order_value:.2f} 元", delta="较总体" + ("↑" if avg_order_value > overall_avg else "↓"))
 
     st.markdown("---")
-    st.subheader("📈 每日销售趋势")
+    st.subheader("每日销售趋势")
     col_chart1, col_chart2 = st.columns([2, 1])
 
     with col_chart1:
         daily_sales = filtered_df.groupby(filtered_df['下单时间'].dt.date)['付款金额'].sum().reset_index()
         daily_sales.columns = ['日期', '销售额']
         fig_line = px.line(daily_sales, x='日期', y='销售额', markers=True, title="每日销售额变化趋势")
-        fig_line.update_traces(line={"width": 3, "color": '#1f77b4'}, marker={"size": 6})
+        fig_line.update_traces(line={"width": 3, "color": "#1565C0"}, marker={"size": 6})
         fig_line.update_layout(**_PLOTLY_LAYOUT_DEFAULTS, hovermode='x unified')
         st.plotly_chart(fig_line, width='stretch')
 
     with col_chart2:
         platform_sales = filtered_df.groupby('平台类型')['付款金额'].sum().reset_index()
-        fig_pie = px.pie(platform_sales, values='付款金额', names='平台类型', title="平台销售占比", hole=0.4, color_discrete_sequence=px.colors.qualitative.Set3)
+        fig_pie = px.pie(platform_sales, values='付款金额', names='平台类型', title="平台销售占比", hole=0.4, color_discrete_sequence=_CHART_SEQUENCE)
         fig_pie.update_traces(textposition='inside', textinfo='percent+label')
         fig_pie.update_layout(**_PLOTLY_LAYOUT_DEFAULTS)
         st.plotly_chart(fig_pie, width='stretch')
 
-    st.subheader("🏆 商品销售额 TOP10")
+    st.subheader("商品销售额 TOP10")
     top_products = filtered_df.groupby('商品编号')['付款金额'].sum().nlargest(10).reset_index()
-    fig_bar = px.bar(top_products, x='商品编号', y='付款金额', title="销售额 TOP10 商品", color='付款金额', color_continuous_scale='Reds')
+    fig_bar = px.bar(top_products, x='商品编号', y='付款金额', title="销售额 TOP10 商品", color='付款金额', color_continuous_scale=_BLUE_SCALE)
     fig_bar.update_layout(**_PLOTLY_LAYOUT_DEFAULTS)
     fig_bar.update_layout(xaxis_title="商品编号", yaxis_title="销售额 (元)")
     fig_bar.update_traces(texttemplate='%{y:.0f}', textposition='outside')
     st.plotly_chart(fig_bar, width='stretch')
 
-    st.subheader("👑 用户消费 TOP10")
+    st.subheader("用户消费 TOP10")
     top_users = filtered_df.groupby('用户名')['付款金额'].sum().nlargest(10).reset_index()
-    fig_user = px.bar(top_users, x='付款金额', y='用户名', orientation='h', title="消费金额 TOP10 用户", color='付款金额', color_continuous_scale='Viridis')
+    fig_user = px.bar(top_users, x='付款金额', y='用户名', orientation='h', title="消费金额 TOP10 用户", color='付款金额', color_continuous_scale=_TEAL_SCALE)
     fig_user.update_layout(**_PLOTLY_LAYOUT_DEFAULTS)
     fig_user.update_layout(xaxis_title="消费金额 (元)", yaxis_title="用户")
     fig_user.update_traces(texttemplate='%{x:.0f}', textposition='outside')
@@ -179,12 +416,12 @@ if page == "📊 销售总览":
     st.caption(f"数据更新时间：{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} | 数据来源：cleaned_orders | AI Commerce Intelligence Platform v1.0.3")
 
 # ══════════════════════════════════════════════════════════════
-# 企业级RFM分层分析
+# RFM 分层分析
 # ══════════════════════════════════════════════════════════════
-elif page == "👥 RFM 客户分层":
+elif page == "RFM 客户分层":
 
     # ── 侧边栏参数 ──
-    st.sidebar.header("⚙️ RFM 参数设置")
+    st.sidebar.header("RFM 参数设置")
     n_bins = st.sidebar.slider("分位数分组数", min_value=3, max_value=10, value=5, step=1)
     ref_date_input = st.sidebar.date_input(
         "参考日期",
@@ -205,7 +442,7 @@ elif page == "👥 RFM 客户分层":
         & (df['下单时间'].dt.date <= ref_date_input)
     ].copy()
     if len(paid_df) == 0:
-        st.warning("⚠️ 当前筛选条件下无有效付款数据，无法进行 RFM 分析。")
+        st.warning("当前筛选条件下无有效付款数据，无法进行 RFM 分析。")
         st.stop()
 
     @st.cache_data(show_spinner="正在计算RFM指标...")
@@ -279,14 +516,14 @@ elif page == "👥 RFM 客户分层":
     total_gmv = rfm['monetary'].sum() if total_users > 0 else 0
 
     # ── 页面标题 ──
-    st.title("👥 RFM 客户分层分析")
+    st.title("RFM 客户分层分析")
     st.caption(f"数据截止：{ref_date_input} | 分组数：{n_bins} | R阈值≤{r_threshold} F/M阈值≥{f_threshold} | 共 {total_users:,} 位客户 | 总GMV {total_gmv:,.0f} 元")
     st.markdown("---")
 
     # ══════════════════════════════════════════════════════
     # 三个Tab
     # ══════════════════════════════════════════════════════
-    tab1, tab2, tab3 = st.tabs(["📊 分层概览", "🎯 价值矩阵", "🔍 群体洞察"])
+    tab1, tab2, tab3 = st.tabs(["分层概览", "价值矩阵", "群体洞察"])
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     # Tab1: 分层概览（高管视角）
@@ -310,21 +547,21 @@ elif page == "👥 RFM 客户分层":
         k1, k2, k3 = st.columns(3)
         with k1:
             st.metric(
-                "💎 高价值客户占比",
+                "高价值客户占比",
                 f"{high_value_pct:.1f}%",
                 delta=f"目标 ≥30%  {'达标' if high_value_pct >= 30 else '未达标'}",
             )
             st.caption("重要价值 + 重要发展 + 重要保持 + 重要挽留")
         with k2:
             st.metric(
-                "⚠️ 流失风险客户",
+                "流失风险客户",
                 f"{risk_count:,}",
                 delta=f"占比 {risk_pct:.1f}%  {'预警' if risk_pct > 50 else '可控'}",
             )
             st.caption("一般挽留客户（R低/F低/M低）")
         with k3:
             st.metric(
-                "💰 高价值GMV贡献率",
+                "高价值GMV贡献率",
                 f"{high_value_gmv_pct:.1f}%",
                 delta=f"基准 ≥60%  {'达标' if high_value_gmv_pct >= 60 else '未达标'}",
             )
@@ -339,9 +576,9 @@ elif page == "👥 RFM 客户分层":
             avg_freq = rfm['frequency'].mean()
             suggest_f = min(3, f_threshold - 1) if avg_freq < 2 else f_threshold
             st.warning(
-                f"⚠️ 当前参数下 **{len(empty_segments)} 个分群为空**："
+                f"当前参数下 **{len(empty_segments)} 个分群为空**："
                 f" {', '.join(empty_segments)}\n\n"
-                f"💡 建议调整：当前数据平均消费频次仅 **{avg_freq:.1f}次/人**，"
+                f"建议调整：当前数据平均消费频次仅 **{avg_freq:.1f}次/人**，"
                 f"F阈值建议降至 **{suggest_f}** 或更低，以激活更多分群。"
                 f"可在左侧面板调整「F评分阈值」。"
             )
@@ -382,7 +619,7 @@ elif page == "👥 RFM 客户分层":
             )])
             fig_ring.add_annotation(
                 text=f"<b>{total_users:,}</b><br>客户总数",
-                x=0.5, y=0.5, font={"size": 18, "family": "Microsoft YaHei", "color": '#1e293b', "weight": 'bold'},
+                x=0.5, y=0.5, font={"size": 18, "family": "Manrope, Noto Sans SC, Microsoft YaHei, sans-serif", "color": "#0F172A", "weight": "bold"},
                 showarrow=False
             )
             fig_ring.update_layout(
@@ -426,7 +663,7 @@ elif page == "👥 RFM 客户分层":
         st.markdown("---")
 
         # ── RFM 分层规则说明 ──
-        with st.expander("📖 RFM 分层规则说明", expanded=True):
+        with st.expander("RFM 分层规则说明", expanded=True):
             st.markdown(f"""
 | 客户分层 | R条件 | F条件 | M条件 | 业务定义 | 运营策略 |
 |---------|-------|-------|-------|---------|---------|
@@ -439,7 +676,7 @@ elif page == "👥 RFM 客户分层":
 | **一般保持客户** | R＞{r_threshold} | F＜{f_threshold} | M≥{m_threshold} | 较久未购+低频+高额 | 重点召回、大额优惠 |
 | **一般挽留客户** | R＞{r_threshold} | F＜{f_threshold} | M＜{m_threshold} | 较久未购+低频+低额 | 自动化触达、成本控制 |
             """)
-            st.info("💡 R评分越小代表越近期消费（越优），F/M评分越大代表消费频次/金额越高（越优）。分层阈值可在左侧参数面板实时调整。")
+            st.info("R评分越小代表越近期消费（越优），F/M评分越大代表消费频次/金额越高（越优）。分层阈值可在左侧参数面板实时调整。")
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     # Tab2: 价值矩阵（运营视角）
@@ -456,7 +693,7 @@ elif page == "👥 RFM 客户分层":
                 filter_platform = st.multiselect("平台筛选", options=platform_options, default=platform_options, key="matrix_platform")
 
             r_range = st.slider("R 评分范围", 1, n_bins, (1, n_bins), key="matrix_r")
-            if st.button("🔄 重置筛选", key="reset_matrix"):
+            if st.button("重置筛选", key="reset_matrix"):
                 st.rerun()
 
             st.markdown("---")
@@ -516,7 +753,7 @@ elif page == "👥 RFM 客户分层":
                 z=z_display,
                 x=[f'F={c}' for c in fm_pivot.columns],
                 y=[f'M={r}' for r in fm_pivot.index],
-                colorscale=[[0, '#1e293b'], [0.01, '#334155'], [0.5, '#fbbf24'], [1, '#dc2626']],
+                colorscale=_BLUE_SCALE,
                 zmin=0, zmax=max(1, fm_pivot.values.max()),
                 colorbar={"title": "客户规模", "len": 0.45, "y": 0.5, "thickness": 15},
                 hovertemplate='F=%{x}, M=%{y}<br>客户数: %{z:,.0f}<extra></extra>',
@@ -572,7 +809,7 @@ elif page == "👥 RFM 客户分层":
                             x=f'F={f_v}', y=f'M={m_v}',
                             text=f"<b>{short_name}</b>",
                             showarrow=False,
-                            font={"size": 10, "color": "white", "family": "Microsoft YaHei"},
+                            font={"size": 10, "color": "white", "family": "Manrope, Noto Sans SC, Microsoft YaHei, sans-serif"},
                             bgcolor=_hex_to_rgba(ENTERPRISE_COLORS_FULL.get(seg, "#999"), 0.8),
                             borderpad=2,
                         )
@@ -685,7 +922,7 @@ elif page == "👥 RFM 客户分层":
                 fig_trend = go.Figure()
                 fig_trend.add_trace(go.Bar(
                     x=monthly['月份'], y=monthly['GMV'],
-                    name='GMV', marker_color='#1E88E5', opacity=0.7,
+                    name='GMV', marker_color="#1565C0", opacity=0.78,
                     yaxis='y',
                 ))
                 fig_trend.add_trace(go.Scatter(
@@ -711,48 +948,48 @@ elif page == "👥 RFM 客户分层":
             st.markdown("---")
 
             # ── 行动建议卡 ──
-            st.markdown("##### 📋 运营行动建议")
+            st.markdown("##### 运营行动建议")
 
             ACTION_MAP = {
                 "重要价值客户": [
-                    ("✅ VIP专属服务升级", "开放专属客服通道、新品优先试用权益", "数据来源：2025Q4策略复盘报告"),
-                    ("✅ 高价值品类推荐", "推送高毛利品类（历史转化率35%）", "数据来源：2025Q4品类分析"),
-                    ("✅ 会员积分加速", "双倍积分激励，提升粘性", "数据来源：会员运营SOP"),
+                    ("VIP专属服务升级", "开放专属客服通道、新品优先试用权益", "数据来源：2025Q4策略复盘报告"),
+                    ("高价值品类推荐", "推送高毛利品类（历史转化率35%）", "数据来源：2025Q4品类分析"),
+                    ("会员积分加速", "双倍积分激励，提升粘性", "数据来源：会员运营SOP"),
                 ],
                 "重要发展客户": [
-                    ("✅ 提升客单价组合推荐", "推送关联商品组合（历史客单价提升22%）", "数据来源：2025Q4策略复盘报告"),
-                    ("✅ 满减门槛引导", "设置略高于当前客单价的满减门槛", "数据来源：价格敏感度分析"),
-                    ("✅ 品类交叉推荐", "根据已购品类推荐高关联品类", "数据来源：购物篮分析"),
+                    ("提升客单价组合推荐", "推送关联商品组合（历史客单价提升22%）", "数据来源：2025Q4策略复盘报告"),
+                    ("满减门槛引导", "设置略高于当前客单价的满减门槛", "数据来源：价格敏感度分析"),
+                    ("品类交叉推荐", "根据已购品类推荐高关联品类", "数据来源：购物篮分析"),
                 ],
                 "重要保持客户": [
-                    ("✅ 复购提醒推送", "周期性推送复购提醒（历史召回率18%）", "数据来源：2025Q4策略复盘报告"),
-                    ("✅ 专属客服外呼", "大客户经理主动触达，了解需求", "数据来源：大客户运营SOP"),
-                    ("✅ 定期专属优惠", "每月发放高面额专属券", "数据来源：优惠券ROI分析"),
+                    ("复购提醒推送", "周期性推送复购提醒（历史召回率18%）", "数据来源：2025Q4策略复盘报告"),
+                    ("专属客服外呼", "大客户经理主动触达，了解需求", "数据来源：大客户运营SOP"),
+                    ("定期专属优惠", "每月发放高面额专属券", "数据来源：优惠券ROI分析"),
                 ],
                 "重要挽留客户": [
-                    ("✅ 推送高毛利品类券", "发放专属品类券（历史转化率22%）", "数据来源：2025Q4策略复盘报告"),
-                    ("✅ 触发专属客服外呼", "人工外呼了解流失原因", "数据来源：客户挽留SOP"),
-                    ("✅ 排除低价引流广告", "该群体对价格敏感度低，避免低价引流", "数据来源：广告投放效果分析"),
+                    ("推送高毛利品类券", "发放专属品类券（历史转化率22%）", "数据来源：2025Q4策略复盘报告"),
+                    ("触发专属客服外呼", "人工外呼了解流失原因", "数据来源：客户挽留SOP"),
+                    ("排除低价引流广告", "该群体对价格敏感度低，避免低价引流", "数据来源：广告投放效果分析"),
                 ],
                 "一般价值客户": [
-                    ("✅ 召回激活短信", "发送专属回归礼召回（历史召回率15%）", "数据来源：2025Q4策略复盘报告"),
-                    ("✅ 高价值商品推荐", "推送其历史偏好的高价值品类", "数据来源：用户偏好分析"),
-                    ("✅ 限时回归优惠", "72小时限时大额优惠券", "数据来源：限时促销效果分析"),
+                    ("召回激活短信", "发送专属回归礼召回（历史召回率15%）", "数据来源：2025Q4策略复盘报告"),
+                    ("高价值商品推荐", "推送其历史偏好的高价值品类", "数据来源：用户偏好分析"),
+                    ("限时回归优惠", "72小时限时大额优惠券", "数据来源：限时促销效果分析"),
                 ],
                 "一般发展客户": [
-                    ("✅ 唤醒提醒短信", "定期唤醒推送（频率≤2次/月）", "数据来源：推送频率优化报告"),
-                    ("✅ 小额优惠券投放", "发放小额无门槛券降低复购门槛", "数据来源：优惠券ROI分析"),
-                    ("✅ 新品上新通知", "根据历史偏好推送新品", "数据来源：新品推荐策略"),
+                    ("唤醒提醒短信", "定期唤醒推送（频率≤2次/月）", "数据来源：推送频率优化报告"),
+                    ("小额优惠券投放", "发放小额无门槛券降低复购门槛", "数据来源：优惠券ROI分析"),
+                    ("新品上新通知", "根据历史偏好推送新品", "数据来源：新品推荐策略"),
                 ],
                 "一般保持客户": [
-                    ("✅ 加入会员成长体系", "引导进入积分/等级体系", "数据来源：会员运营SOP"),
-                    ("✅ 复购提醒短信", "基于上次购买周期推送复购提醒", "数据来源：2025Q4策略复盘报告"),
-                    ("✅ 开放积分兑换权益", "积分兑换优惠券/实物", "数据来源：积分体系运营报告"),
+                    ("加入会员成长体系", "引导进入积分/等级体系", "数据来源：会员运营SOP"),
+                    ("复购提醒短信", "基于上次购买周期推送复购提醒", "数据来源：2025Q4策略复盘报告"),
+                    ("开放积分兑换权益", "积分兑换优惠券/实物", "数据来源：积分体系运营报告"),
                 ],
                 "一般挽留客户": [
-                    ("✅ 自动化触达", "低成本自动化营销触达", "数据来源：自动化营销SOP"),
-                    ("✅ 成本控制策略", "降低服务成本，聚焦高ROI渠道", "数据来源：渠道ROI分析"),
-                    ("✅ 沉默用户清理", "超过180天未购转入沉默库", "数据来源：用户生命周期管理"),
+                    ("自动化触达", "低成本自动化营销触达", "数据来源：自动化营销SOP"),
+                    ("成本控制策略", "降低服务成本，聚焦高ROI渠道", "数据来源：渠道ROI分析"),
+                    ("沉默用户清理", "超过180天未购转入沉默库", "数据来源：用户生命周期管理"),
                 ],
             }
 
@@ -767,7 +1004,7 @@ elif page == "👥 RFM 客户分层":
             st.markdown("---")
 
             # ── 客户明细表 ──
-            st.markdown(f"##### 📋 {sel_segment} 客户明细（前200条）")
+            st.markdown(f"##### {sel_segment} 客户明细（前200条）")
 
             display_cols = ['用户名', 'r_score', 'f_score', 'm_score', 'recency_days', 'frequency', 'monetary']
             display_labels = {
@@ -782,11 +1019,11 @@ elif page == "👥 RFM 客户分层":
             # ── 导出CSV ──
             csv_data = detail_df.to_csv(index=False).encode('utf-8-sig')
             st.download_button(
-                label="📥 导出CSV",
+                label="导出 CSV",
                 data=csv_data,
                 file_name=f"{sel_segment}_客户明细.csv",
                 mime="text/csv",
             )
 
     st.markdown("---")
-    st.caption(f"数据更新时间：{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} | 企业级RFM分层页面 v3.0 | AI Commerce Intelligence Platform")
+    st.caption(f"数据更新时间：{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} | RFM 分层页面 v3.0 | AI Commerce Intelligence Platform")

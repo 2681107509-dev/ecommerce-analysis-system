@@ -3,558 +3,954 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AI Commerce Intelligence Platform - 统一入口</title>
+<title>AI Commerce Intelligence Platform — 一次提问，看它如何变成一次安全的数据查询</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Manrope:wght@700;800&family=Noto+Sans+SC:wght@400;500;700;800&display=swap" rel="stylesheet">
 <style>
+/* ===== 设计令牌（克制版 AI Runtime + 数据工作台）===== */
+:root {
+    --bg: #0B0D10;
+    --surface: #13171D;
+    --surface-2: #1A2029;
+    --line: rgba(148, 163, 184, 0.12);
+    --line-strong: rgba(148, 163, 184, 0.22);
+    --ink: #F8FAFC;
+    --ink-2: #94A3B8;
+    --ink-3: #64748B;
+    --blue: #3B82F6;      /* 路由 / 数据查询 */
+    --purple: #8B5CF6;    /* RAG 知识检索 */
+    --teal: #14B8A6;      /* SQL 生成与执行 */
+    --orange: #F97316;    /* 安全防护 */
+    --green: #22C55E;     /* 完成 / 在线 */
+    --mono: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+    --sans: "Manrope", "Noto Sans SC", -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+}
 * { margin: 0; padding: 0; box-sizing: border-box; }
-
+html { scroll-behavior: smooth; overflow-x: hidden; }
 body {
-    font-family: -apple-system, 'Segoe UI', sans-serif;
-    background: #0a0e1a;
-    color: #e2e8f0;
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
+    font-family: var(--sans);
+    background: var(--bg);
+    color: var(--ink);
+    line-height: 1.6;
     overflow-x: hidden;
 }
+a { color: inherit; }
+code, pre, .mono { font-family: var(--mono); }
+.num { font-variant-numeric: tabular-nums; }
 
-/* 粒子背景画布 */
-#particle-canvas {
-    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-    pointer-events: none; z-index: 0;
+/* ===== 顶部状态栏 ===== */
+.topbar {
+    position: sticky; top: 0; z-index: 50;
+    display: flex; align-items: center; gap: 16px;
+    padding: 0 24px; height: 52px;
+    background: rgba(11, 13, 16, 0.96);
+    border-bottom: 1px solid var(--line);
 }
-
-/* 文字逐字揭示容器 */
-.reveal-chars { display: inline-block; overflow: hidden; }
-.reveal-chars span { display: inline-block; }
-
-/* 脉冲光环 */
-@keyframes glow-pulse {
-    0%, 100% { box-shadow: 0 0 20px rgba(99,102,241,0.15); }
-    50% { box-shadow: 0 0 40px rgba(99,102,241,0.35); }
+.topbar .brand {
+    display: flex; align-items: center; gap: 10px;
+    font-weight: 700; font-size: 14px; letter-spacing: 0.2px;
+    text-decoration: none; white-space: nowrap;
 }
-.glow-active { animation: glow-pulse 3s ease-in-out infinite; }
-
-/* 卡片入场动画 */
-@keyframes card-enter {
-    from { opacity: 0; transform: translateY(40px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-.cards-grid .card {
-    animation: card-enter 0.6s ease-out backwards;
-}
-.cards-grid .card:nth-child(1) { animation-delay: 0.1s; }
-.cards-grid .card:nth-child(2) { animation-delay: 0.2s; }
-.cards-grid .card:nth-child(3) { animation-delay: 0.3s; }
-.cards-grid .card:nth-child(4) { animation-delay: 0.4s; }
-.cards-grid .card:nth-child(5) { animation-delay: 0.5s; }
-.cards-grid .card:nth-child(6) { animation-delay: 0.6s; }
-
-/* 卡片悬停 */
-.card:hover {
-    transform: translateY(-4px);
-    border-color: rgba(129,140,248,0.3);
-    box-shadow: 0 12px 40px rgba(0,0,0,0.4), 0 0 60px rgba(99,102,241,0.06);
-}
-.card:hover::before { opacity: 1; }
-
-/* 顶部导航 */
-.header {
-    background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%);
-    border-bottom: 1px solid rgba(129,140,248,0.15);
-    padding: 20px 40px;
-    display: flex;
-    align-items: center;
-    gap: 16px;
-}
-
-.logo-icon {
-    width: 44px; height: 44px;
-    background: linear-gradient(135deg, #818cf8, #6366f1);
-    border-radius: 12px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 22px;
-    box-shadow: 0 4px 20px rgba(99,102,241,0.3);
-}
-
-.title-group { display: flex; align-items: baseline; gap: 12px; }
-.title-group h1 {
-    font-size: 22px; font-weight: 700;
-    background: linear-gradient(90deg, #f1f5f9, #94a3b8);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
+.brand-dot {
+    width: 8px; height: 8px; border-radius: 2px;
+    background: linear-gradient(135deg, var(--blue), var(--teal));
 }
 .version-badge {
-    font-size: 11px; font-weight: 600;
-    background: rgba(99,102,241,0.15); color: #818cf8;
-    padding: 3px 10px; border-radius: 20px;
-    border: 1px solid rgba(99,102,241,0.25);
+    font-family: var(--mono); font-size: 11px;
+    color: var(--ink-2); border: 1px solid var(--line);
+    padding: 2px 8px; border-radius: 4px;
 }
-.header-right {
+.svc-status {
     margin-left: auto;
-    display: flex; align-items: center; gap: 16px;
+    display: flex; align-items: center; gap: 14px;
+    font-size: 12px; color: var(--ink-2);
 }
-.status-dot {
-    display: flex; align-items: center; gap: 6px;
-    font-size: 13px; color: #64748b;
-}
-.status-dot .dot {
-    width: 8px; height: 8px; border-radius: 50%;
+.svc-pill { display: flex; align-items: center; gap: 6px; }
+.svc-pill .dot {
+    width: 7px; height: 7px; border-radius: 50%;
     background: #475569;
-    animation: pulse 2s infinite;
 }
-.status-dot .dot.online { background: #22c55e; box-shadow: 0 0 8px rgba(34,197,94,0.5); }
-@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
+.svc-pill .dot.online { background: var(--green); }
+.svc-pill .dot.offline { background: var(--orange); }
+.topbar nav { display: flex; gap: 4px; }
+.topbar nav a {
+    font-size: 12.5px; color: var(--ink-2); text-decoration: none;
+    padding: 5px 10px; border-radius: 6px;
+}
+.topbar nav a:hover { color: var(--ink); background: var(--surface-2); }
 
-/* 主内容区 */
-.main {
-    flex: 1; display: flex; flex-direction: column;
-    align-items: center; justify-content: center;
-    padding: 40px 24px;
+/* ===== 布局容器 ===== */
+.wrap { max-width: 1180px; margin: 0 auto; padding: 0 24px; }
+section { padding: 72px 0; }
+.section-title { font-size: 28px; font-weight: 800; letter-spacing: -0.5px; margin-bottom: 14px; }
+.section-sub { color: var(--ink-2); font-size: 15px; max-width: 640px; }
+
+/* ===== Hero ===== */
+.hero { padding: 84px 0 56px; }
+.hero h1 {
+    font-size: clamp(30px, 4.6vw, 52px);
+    font-weight: 800; letter-spacing: -1.2px; line-height: 1.18;
+    max-width: 820px; overflow-wrap: break-word;
+}
+.hero h1 .hl-sql { color: var(--teal); }
+.hero h1 .hl-rag { color: var(--purple); }
+.hero h1 .hl-safe { color: var(--orange); }
+.hero .sub {
+    margin-top: 20px; font-size: 16.5px; color: var(--ink-2);
+    max-width: 660px; line-height: 1.8;
+}
+.speed-read {
+    margin-top: 28px; padding: 14px 18px;
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 8px;
+    font-size: 14px; color: var(--ink-2); max-width: 700px;
+}
+.speed-read .sr-label {
+    display: inline-block; font-family: var(--mono); font-size: 10.5px;
+    letter-spacing: 1px; color: var(--blue);
+    border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 4px;
+    padding: 1px 7px; margin-right: 8px; vertical-align: 1px;
+}
+.speed-read strong { color: var(--ink); font-weight: 600; }
+.cta-row { display: flex; gap: 12px; margin-top: 32px; flex-wrap: wrap; }
+.btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 11px 20px; border-radius: 8px;
+    font-size: 14px; font-weight: 600; text-decoration: none;
+    border: 1px solid transparent; transition: transform 0.15s, background 0.15s;
+}
+.btn:active { transform: translateY(1px); }
+.btn-primary { background: var(--blue); color: #fff; }
+.btn-primary:hover { background: #2F6FE0; }
+.btn-ghost { border-color: var(--line-strong); color: var(--ink); background: transparent; }
+.btn-ghost:hover { background: var(--surface-2); }
+.hero-points {
+    display: flex; gap: 22px; margin-top: 30px; flex-wrap: wrap;
+    font-size: 13px; color: var(--ink-3);
+}
+.hero-points span::before {
+    content: ""; display: inline-block;
+    width: 5px; height: 5px; background: var(--teal);
+    margin-right: 8px; vertical-align: 2px;
 }
 
-.hero {
-    text-align: center; margin-bottom: 48px;
-}
-.hero h2 {
-    font-size: 32px; font-weight: 800; margin-bottom: 12px;
-    letter-spacing: -0.5px;
-}
-.hero h2 .highlight { color: #818cf8; }
-.hero p {
-    font-size: 16px; color: #64748b; max-width: 520px;
-    margin: 0 auto; line-height: 1.7;
-}
-
-/* 服务卡片网格 */
-.cards-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-    gap: 20px;
-    max-width: 1100px; width: 100%;
-}
-
-.card {
-    background: #111827;
-    border: 1px solid rgba(148,163,184,0.08);
-    border-radius: 16px;
-    padding: 28px;
-    text-decoration: none;
-    color: inherit;
-    position: relative;
-    overflow: hidden;
-    opacity: 1;
-    transform: translateY(0);
-}
-.card::before {
-    content: '';
-    position: absolute; top: 0; left: 0; right: 0; height: 3px;
-    opacity: 0; transition: opacity 0.3s;
-}
-
-.card-bi::before { background: linear-gradient(90deg, #ef4444, #f97316); }
-.card-ai::before { background: linear-gradient(90deg, #818cf8, #6366f1); }
-.card-api-docs::before { background: linear-gradient(90deg, #06b6d4, #0891b2); }
-.card-api-demo::before { background: linear-gradient(90deg, #22c55e, #16a34a); }
-.card-monitor::before { background: linear-gradient(90deg, #f59e0b, #d97706); }
-.card-health::before { background: linear-gradient(90deg, #06b6d4, #0891b2); }
-
-.card-header {
-    display: flex; align-items: center; justify-content: space-between;
-    margin-bottom: 18px;
-}
-.card-icon {
-    width: 52px; height: 52px;
+/* ===== 调试器窗口 ===== */
+.debugger {
+    background: var(--surface);
+    border: 1px solid var(--line-strong);
     border-radius: 14px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 26px;
+    overflow: hidden;
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
 }
-.icon-bi { background: rgba(239,68,68,0.12); }
-.icon-ai { background: rgba(129,140,248,0.12); }
-.icon-docs { background: rgba(6,182,212,0.12); }
-.icon-demo { background: rgba(34,197,94,0.12); }
-.icon-monitor { background: rgba(245,158,11,0.12); }
-.icon-health { background: rgba(6,182,212,0.12); }
+.dbg-titlebar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 16px;
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--line);
+    font-family: var(--mono); font-size: 12px; color: var(--ink-2);
+}
+.dbg-titlebar .lights { display: flex; gap: 6px; }
+.dbg-titlebar .lights i {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: #2A3340; display: block;
+}
+.dbg-titlebar .lights i:nth-child(1) { background: #F97316; opacity: 0.75; }
+.dbg-titlebar .lights i:nth-child(2) { background: #EAB308; opacity: 0.75; }
+.dbg-titlebar .lights i:nth-child(3) { background: #22C55E; opacity: 0.75; }
+.dbg-titlebar .path { margin-left: 10px; }
+.dbg-body { display: grid; grid-template-columns: 3fr 2fr; min-height: 460px; }
 
-.card-status {
-    font-size: 11px; font-weight: 600; padding: 4px 10px;
-    border-radius: 20px; letter-spacing: 0.3px;
+/* 左：流水线 */
+.pipeline { padding: 22px 20px; border-right: 1px solid var(--line); }
+.pipe-question {
+    font-size: 14px; color: var(--ink);
+    background: var(--bg); border: 1px solid var(--line);
+    border-radius: 8px; padding: 12px 14px; margin-bottom: 18px;
 }
-.status-ready { background: rgba(34,197,94,0.12); color: #22c55e; }
-.status-manual { background: rgba(245,158,11,0.12); color: #f59e0b; }
-.status-external { background: rgba(99,102,241,0.12); color: #818cf8; }
+.pipe-question .q-label {
+    font-family: var(--mono); font-size: 10.5px; color: var(--ink-3);
+    display: block; margin-bottom: 4px; letter-spacing: 1px;
+}
+.node {
+    display: flex; align-items: center; gap: 12px;
+    padding: 9px 12px; border-radius: 8px;
+    border: 1px solid transparent;
+    transition: background 0.35s, border-color 0.35s;
+}
+.node + .node { margin-top: 2px; }
+.node .step-no {
+    font-family: var(--mono); font-size: 10.5px; color: var(--ink-3);
+    width: 22px; flex: none;
+}
+.node .node-name { font-family: var(--mono); font-size: 13px; color: var(--ink-2); flex: 1; }
+.node .node-tag {
+    font-family: var(--mono); font-size: 10px; padding: 2px 8px;
+    border-radius: 4px; color: var(--ink-3); background: transparent;
+}
+.node.done .node-name { color: var(--ink-2); }
+.node.done .step-no { color: var(--green); }
+.node.done .step-no::after { content: " ✓"; }
+.node.current {
+    background: var(--surface-2);
+    border-color: var(--line-strong);
+}
+.node.current .node-name { color: var(--ink); font-weight: 600; }
+.node.current .step-no { color: var(--blue); }
+/* 分组色通过 tag 芯片表达，不用侧边框 */
+.node.group-safety.current .node-tag { color: var(--orange); background: rgba(249, 115, 22, 0.1); }
+.node.group-rag.current .node-tag { color: var(--purple); background: rgba(139, 92, 246, 0.1); }
+.node.group-sql.current .node-tag { color: var(--teal); background: rgba(20, 184, 166, 0.1); }
+.node.group-route.current .node-tag { color: var(--blue); background: rgba(59, 130, 246, 0.1); }
+.node.group-sys.current .node-tag { color: var(--ink-2); background: rgba(148, 163, 184, 0.1); }
 
-.card h3 {
-    font-size: 18px; font-weight: 700; margin-bottom: 8px;
+/* 右：检查面板 */
+.inspect {
+    padding: 22px 20px;
+    display: flex; flex-direction: column; gap: 14px;
+    background: var(--bg);
 }
-.card p {
-    font-size: 14px; color: #64748b; line-height: 1.6; margin-bottom: 16px;
+.inspect-title {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 1.5px;
+    color: var(--ink-3); text-transform: uppercase;
 }
-.card-tags {
-    display: flex; gap: 8px; flex-wrap: wrap;
+.inspect-field { font-size: 13px; }
+.inspect-field .k {
+    font-family: var(--mono); font-size: 10.5px; color: var(--ink-3);
+    letter-spacing: 1px; display: block; margin-bottom: 4px;
 }
-.tag {
-    font-size: 11px; padding: 3px 10px; border-radius: 6px;
-    font-weight: 500; background: rgba(148,163,184,0.06); color: #94a3b8;
+.intent-chip {
+    display: inline-block; font-family: var(--mono); font-size: 12px;
+    padding: 3px 10px; border-radius: 4px;
+    background: rgba(59, 130, 246, 0.12); color: var(--blue);
+    border: 1px solid rgba(59, 130, 246, 0.3);
 }
-.tag-tech { background: rgba(129,140,248,0.08); color: #a5b4fc; }
+.sql-box {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 8px; padding: 12px 14px;
+    font-family: var(--mono); font-size: 12px; line-height: 1.7;
+    color: var(--ink-2); overflow-x: auto; white-space: pre;
+}
+.sql-box .kw { color: var(--teal); }
+.sql-box .fn { color: var(--purple); }
+.sql-box .lit { color: var(--orange); }
+.src-item {
+    font-size: 12.5px; color: var(--ink-2);
+    display: flex; justify-content: space-between; gap: 10px;
+}
+.src-item .score { font-family: var(--mono); color: var(--purple); }
+.usage-row {
+    display: flex; gap: 16px; font-family: var(--mono);
+    font-size: 11.5px; color: var(--ink-3); flex-wrap: wrap;
+}
+.usage-row b { color: var(--ink-2); font-weight: 600; }
 
-.card-arrow {
-    position: absolute; right: 24px; top: 50%; transform: translateY(-50%);
-    font-size: 20px; color: #334155;
-    transition: all 0.3s;
+/* 状态条 + 控制条 */
+.dbg-statusbar {
+    display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+    padding: 9px 16px;
+    background: var(--surface-2);
+    border-top: 1px solid var(--line);
+    font-family: var(--mono); font-size: 11.5px; color: var(--ink-3);
 }
-.card:hover .card-arrow { color: #818cf8; transform: translateY(-50%) translateX(4px); }
+.dbg-statusbar b { color: var(--ink-2); font-weight: 500; }
+.dbg-controls {
+    display: flex; gap: 10px; margin-top: 18px; flex-wrap: wrap;
+}
+.ctrl-btn {
+    font-family: var(--mono); font-size: 12.5px;
+    background: var(--surface); color: var(--ink);
+    border: 1px solid var(--line-strong); border-radius: 7px;
+    padding: 8px 16px; cursor: pointer;
+    transition: background 0.15s;
+}
+.ctrl-btn:hover { background: var(--surface-2); }
+.ctrl-btn.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+.ctrl-btn.primary:hover { background: #2F6FE0; }
 
-/* 底部 */
+/* ===== 指标观察窗 ===== */
+.metrics-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 14px; margin-top: 34px;
+}
+.metric-card {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 10px; padding: 18px 20px;
+}
+.metric-card .m-label {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: 1.5px;
+    color: var(--ink-3); text-transform: uppercase; margin-bottom: 8px;
+}
+.metric-card .m-value {
+    font-size: 30px; font-weight: 800; letter-spacing: -0.5px;
+    font-variant-numeric: tabular-nums;
+}
+.metric-card .m-value .unit { font-size: 14px; color: var(--ink-2); font-weight: 500; margin-left: 4px; }
+.metric-card .m-note { font-size: 12px; color: var(--ink-3); margin-top: 6px; }
+.metric-card.accent-teal .m-value { color: var(--teal); }
+.metric-card.accent-blue .m-value { color: var(--blue); }
+.metric-card.accent-purple .m-value { color: var(--purple); }
+.metric-card.accent-orange .m-value { color: var(--orange); }
+
+/* ===== 真实问题帧 ===== */
+.frames-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin-top: 30px; }
+.frame-card {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 10px; padding: 20px;
+    display: flex; flex-direction: column; gap: 10px;
+}
+.frame-card .f-kind {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: 1.5px;
+    text-transform: uppercase;
+}
+.f-kind.k-data { color: var(--teal); }
+.f-kind.k-knowledge { color: var(--purple); }
+.f-kind.k-hybrid { color: var(--blue); }
+.f-kind.k-blocked { color: var(--orange); }
+.frame-card .f-q { font-size: 14.5px; font-weight: 600; line-height: 1.55; }
+.frame-card .f-route {
+    font-family: var(--mono); font-size: 11px; color: var(--ink-3);
+    line-height: 1.7;
+}
+.frame-card .f-route b { color: var(--ink-2); font-weight: 500; }
+
+/* ===== 四层防护 ===== */
+.guard-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin-top: 30px; }
+.guard-card {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 10px; padding: 20px; position: relative;
+}
+.guard-card::before {
+    content: ""; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+    background: var(--orange); opacity: 0.7; border-radius: 10px 10px 0 0;
+}
+.guard-card .g-no {
+    font-family: var(--mono); font-size: 11px; color: var(--orange);
+    letter-spacing: 2px; margin-bottom: 8px;
+}
+.guard-card h3 { font-size: 15px; font-weight: 700; margin-bottom: 8px; }
+.guard-card p { font-size: 13px; color: var(--ink-2); line-height: 1.7; }
+.guard-card code { font-size: 11.5px; color: var(--teal); background: rgba(20,184,166,0.08); padding: 1px 6px; border-radius: 4px; }
+
+/* ===== 证据表 ===== */
+.eval-table {
+    width: 100%; border-collapse: collapse; margin-top: 26px;
+    font-size: 13.5px;
+}
+.eval-table th, .eval-table td {
+    text-align: left; padding: 11px 14px;
+    border-bottom: 1px solid var(--line);
+}
+.eval-table th {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 1px;
+    color: var(--ink-3); text-transform: uppercase; font-weight: 500;
+}
+.eval-table td { color: var(--ink-2); }
+.eval-table td:first-child { color: var(--ink); font-weight: 600; }
+.eval-table .mono-cell { font-family: var(--mono); font-size: 12.5px; }
+.pass-badge {
+    font-family: var(--mono); font-size: 11px;
+    background: rgba(34, 197, 94, 0.1); color: var(--green);
+    border: 1px solid rgba(34, 197, 94, 0.25);
+    padding: 2px 8px; border-radius: 4px;
+}
+.pending-badge {
+    font-family: var(--mono); font-size: 11px;
+    background: rgba(249, 115, 22, 0.1); color: var(--orange);
+    border: 1px solid rgba(249, 115, 22, 0.25);
+    padding: 2px 8px; border-radius: 4px;
+}
+
+/* ===== RFM 色彩带 ===== */
+.rfm-strip { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 22px; }
+.rfm-chip {
+    font-size: 12.5px; padding: 6px 13px; border-radius: 6px;
+    border: 1px solid var(--line); color: var(--ink-2);
+    display: inline-flex; align-items: center; gap: 8px;
+}
+.rfm-chip i { width: 9px; height: 9px; border-radius: 2px; display: block; }
+
+/* ===== 架构块 ===== */
+.arch-box {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 10px; padding: 22px; margin-top: 26px;
+    font-family: var(--mono); font-size: 12.5px; line-height: 2;
+    color: var(--ink-2); overflow-x: auto; white-space: pre;
+}
+.arch-box .c-blue { color: var(--blue); }
+.arch-box .c-teal { color: var(--teal); }
+.arch-box .c-purple { color: var(--purple); }
+.arch-box .c-orange { color: var(--orange); }
+.arch-box .c-dim { color: var(--ink-3); }
+
+/* ===== 入口列表 ===== */
+.entry-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 14px; margin-top: 28px; }
+.entry-card {
+    display: block; text-decoration: none;
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 10px; padding: 20px;
+    transition: border-color 0.2s, transform 0.2s;
+}
+.entry-card:hover { border-color: var(--line-strong); transform: translateY(-2px); }
+.entry-card h3 { font-size: 15px; font-weight: 700; margin-bottom: 6px; }
+.entry-card p { font-size: 12.5px; color: var(--ink-3); line-height: 1.6; }
+.entry-card .e-path { font-family: var(--mono); font-size: 11px; color: var(--teal); margin-top: 10px; display: block; }
+
+/* ===== 本地运行 ===== */
+.run-steps { margin-top: 24px; display: flex; flex-direction: column; gap: 0; }
+.run-step { display: flex; gap: 16px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+.run-step:last-child { border-bottom: none; }
+.run-step .rs-no {
+    font-family: var(--mono); font-size: 12px; color: var(--teal);
+    width: 30px; flex: none; padding-top: 2px;
+}
+.run-step .rs-body { flex: 1; min-width: 0; }
+.run-step .rs-title { font-size: 14px; font-weight: 600; margin-bottom: 5px; }
+.run-step code {
+    display: block; font-size: 12px; color: var(--ink-2);
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 6px; padding: 8px 12px; margin-top: 6px;
+    overflow-x: auto; white-space: pre;
+}
+
+/* ===== 页脚 ===== */
 .footer {
-    text-align: center; padding: 24px;
-    color: #334155; font-size: 13px;
-    border-top: 1px solid rgba(148,163,184,0.05);
+    border-top: 1px solid var(--line);
+    padding: 28px 0; margin-top: 40px;
+    font-size: 12.5px; color: var(--ink-3);
+    display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap;
 }
-.footer a { color: #64748b; text-decoration: none; }
-.footer a:hover { color: #818cf8; }
+.footer a { color: var(--ink-2); text-decoration: none; }
+.footer a:hover { color: var(--teal); }
 
-/* 响应式 */
-@media (max-width: 720px) {
-    .header { padding: 16px 20px; }
-    .hero h2 { font-size: 24px; }
-    .cards-grid { grid-template-columns: 1fr; }
-    .header-right { display: none; }
+/* ===== 入场动画（有目的、可降级）===== */
+.rise { opacity: 0; transform: translateY(18px); transition: opacity 0.6s ease, transform 0.6s ease; }
+.rise.in { opacity: 1; transform: none; }
+:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 4px; }
+
+@media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    .rise { opacity: 1; transform: none; transition: none; }
+    * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+
+/* ===== 响应式 ===== */
+@media (max-width: 900px) {
+    .dbg-body { grid-template-columns: 1fr; }
+    .pipeline { border-right: none; border-bottom: 1px solid var(--line); }
+    .svc-status .hide-sm { display: none; }
+}
+@media (max-width: 560px) {
+    .topbar nav { display: none; }
+    section { padding: 52px 0; }
+    .hero { padding: 56px 0 40px; }
+    .svc-status { gap: 8px; }
 }
 </style>
-<script src="https://cdn.jsdelivr.net/npm/gsap@3/dist/gsap.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/gsap@3/dist/ScrollTrigger.min.js"></script>
 </head>
 <body>
-<canvas id="particle-canvas"></canvas>
+<!--
+  DIRECTION CONTRACT — Step-Through Debugger（已确认）
+  Seed: 5f9747fd | Mode: persuade | Surface: backend/static/index.html (/)
+  比喻：把 Agent 执行过程当作可单步调试的程序，让访问者逐节点观察
+        input_safety → load_history → route → retrieve/load_schema →
+        generate_sql → validate_sql → execute_sql → synthesize → save_session → finalize
+  吸收的挑战者纪律：depot-blind（只看证据不看口号）、seven-segment（读数克制、tabular-nums）
+  禁用：粒子背景、玻璃拟态堆叠、3D、无意义动效、未核实指标
+-->
 
-<div class="header">
-    <div class="logo-icon">🛒</div>
-    <div class="title-group">
-        <h1>AI Commerce Intelligence Platform</h1>
+<header class="topbar">
+    <a class="brand" href="/">
+        <span class="brand-dot"></span>
+        AI Commerce Intelligence
         <span class="version-badge">v1.0.3</span>
+    </a>
+    <div class="svc-status">
+        <span class="svc-pill"><span class="dot" id="dotApi"></span><span class="hide-sm">API</span></span>
+        <span class="svc-pill"><span class="dot" id="dotBi"></span><span class="hide-sm">BI</span></span>
+        <span class="svc-pill"><span class="dot" id="dotAi"></span><span class="hide-sm">AI 助手</span></span>
     </div>
-    <div class="header-right">
-        <div class="status-dot" id="apiStatus">
-            <span class="dot"></span>
-            <span>API 检测中...</span>
+    <nav>
+        <a href="/BI/" target="_blank">BI 看板</a>
+        <a href="/ai/" target="_blank">AI 助手</a>
+        <a href="/docs" target="_blank">API 文档</a>
+        <a href="https://github.com/super-ZXQ/ai-commerce-intelligence-platform" target="_blank" rel="noopener">GitHub</a>
+    </nav>
+</header>
+
+<main class="wrap">
+
+<!-- ================= Hero ================= -->
+<section class="hero">
+    <h1>一句中文提问，<br>看它如何经过<span class="hl-safe">安全检查</span>、<span class="hl-rag">知识检索</span>与 <span class="hl-sql">SQL 生成</span>，变成一次可审计的数据查询。</h1>
+    <p class="sub">这不是聊天框套壳。下方是一个真实的「单步调试器」：它展示本平台 Agent 在 LangGraph 中运行的 10 个节点，每一步的意图、SQL、来源与耗时都可检查——节点名与执行顺序直接来自 <code>agent_core/runtime.py</code>。</p>
+    <div class="speed-read">
+        <span class="sr-label">速读</span><strong>30 秒：</strong>102,287 条真实电商订单 · 确定性意图路由（5 类意图）· 四层 SQL 安全（AST 白名单 + 只读账号）· 100 + 15 + 15 条评测样本 · 结果集断言评测（GLM 快照 14/15，P50 1,508ms）。
+    </div>
+    <div class="cta-row">
+        <a class="btn btn-primary" href="#debugger">进入单步调试 ↓</a>
+        <a class="btn btn-ghost" href="/ai/" target="_blank">打开 AI 助手</a>
+        <a class="btn btn-ghost" href="/docs" target="_blank">查看 32 个 API</a>
+        <a class="btn btn-ghost" href="https://github.com/super-ZXQ/ai-commerce-intelligence-platform" target="_blank" rel="noopener">源代码</a>
+    </div>
+    <div class="hero-points">
+        <span>节点名与顺序与源码一致</span>
+        <span>所有数字可在仓库中复核</span>
+        <span>无 Key 时优雅降级，不伪造回答</span>
+    </div>
+</section>
+
+<!-- ================= 单步调试器 ================= -->
+<section id="debugger">
+    <h2 class="section-title">把 Agent 当程序来调试</h2>
+    <p class="section-sub">点击「单步」逐节点推进，或「自动播放」按真实执行顺序走一遍。当前节点右侧显示该步的意图、SQL、来源与用量。</p>
+
+    <div class="debugger rise" style="margin-top: 30px;">
+        <div class="dbg-titlebar">
+            <span class="lights"><i></i><i></i><i></i></span>
+            <span class="path">agent_core/runtime.py — LangGraph StateGraph</span>
+        </div>
+        <div class="dbg-body">
+            <div class="pipeline">
+                <div class="pipe-question">
+                    <span class="q-label">USER QUESTION</span>
+                    上个月各平台的销售额分别是多少？
+                </div>
+                <div id="nodeList"></div>
+            </div>
+            <div class="inspect">
+                <div class="inspect-title">Inspect — 当前节点</div>
+                <div class="inspect-field">
+                    <span class="k">NODE</span>
+                    <span class="mono" id="inspNode" style="font-size: 14px; color: var(--ink);">—</span>
+                </div>
+                <div class="inspect-field" id="fieldIntent" style="display:none;">
+                    <span class="k">INTENT（路由结果）</span>
+                    <span class="intent-chip" id="inspIntent">data</span>
+                </div>
+                <div class="inspect-field" id="fieldSql" style="display:none;">
+                    <span class="k">SQL（AST 校验后，自动 LIMIT）</span>
+                    <div class="sql-box" id="inspSql"></div>
+                </div>
+                <div class="inspect-field" id="fieldSrc" style="display:none;">
+                    <span class="k">SOURCES（RAG Top-3，阈值 0.4）</span>
+                    <div id="inspSrc" style="display:flex; flex-direction:column; gap:5px;"></div>
+                </div>
+                <div class="inspect-field" id="fieldNote" style="display:none;">
+                    <span class="k">NOTE</span>
+                    <span id="inspNote" style="font-size: 13px; color: var(--ink-2);"></span>
+                </div>
+                <div class="usage-row" id="inspUsage" style="margin-top:auto; display:none;">
+                    <span>tokens <b id="uTok">—</b></span>
+                    <span>latency <b id="uLat">—</b></span>
+                    <span>retry <b id="uRet">0</b></span>
+                </div>
+            </div>
+        </div>
+        <div class="dbg-statusbar">
+            <span>request_id <b class="mono">req_7f3a…c2</b></span>
+            <span>thread_id <b class="mono">demo-session</b></span>
+            <span>steps <b id="sbSteps">0 / 10</b></span>
+            <span>elapsed <b id="sbElapsed">0 ms</b></span>
         </div>
     </div>
-</div>
 
-<div class="main">
-    <div class="hero">
-        <h2>基于 <span class="highlight">10万+</span> 条订单数据的<br>全链路数据分析平台</h2>
-        <p>从数据清洗、BI 可视化、AI 智能查询到 RESTful API，一站式 AI 智能商业分析平台</p>
+    <div class="dbg-controls">
+        <button class="ctrl-btn primary" id="btnStep" type="button">单步 →</button>
+        <button class="ctrl-btn" id="btnAuto" type="button">自动播放</button>
+        <button class="ctrl-btn" id="btnReset" type="button">重置</button>
     </div>
+</section>
 
-    <div class="cards-grid">
-
-        <!-- BI 数据看板 -->
-        <a href="/BI" target="_blank" class="card card-bi">
-            <div class="card-header">
-                <div class="card-icon icon-bi">📊</div>
-                <span class="card-status status-ready" id="biStatus">检测中</span>
-            </div>
-            <h3>📊 BI 数据看板</h3>
-            <p>交互式数据大屏，多维度交叉筛选。销售总览、趋势分析、平台占比、RFM 用户分层。</p>
-            <div class="card-tags">
-                <span class="tag">Streamlit</span>
-                <span class="tag">Plotly</span>
-                <span class="tag">实时筛选</span>
-            </div>
-            <span class="card-arrow">→</span>
-        </a>
-
-        <!-- AI 分析助手 -->
-        <a href="/ai/" target="_blank" class="card card-ai">
-            <div class="card-header">
-                <div class="card-icon icon-ai">🤖</div>
-                <span class="card-status status-ready" id="aiStatus">检测中</span>
-            </div>
-            <h3>🤖 AI 分析助手</h3>
-            <p>自然语言查数，自动生成 SQL 并执行。智能图表渲染、异常预警、敏感过滤、CSV 导出。</p>
-            <div class="card-tags">
-                <span class="tag tag-tech">LangChain</span>
-                <span class="tag tag-tech">Qwen LLM</span>
-                <span class="tag">Text-to-SQL</span>
-            </div>
-            <span class="card-arrow">→</span>
-        </a>
-
-        <!-- API 文档 -->
-        <a href="/docs" target="_blank" class="card card-api-docs">
-            <div class="card-header">
-                <div class="card-icon icon-docs">📚</div>
-                <span class="card-status status-ready" id="docsStatus">检测中</span>
-            </div>
-            <h3>📚 API 文档 (Swagger)</h3>
-            <p>FastAPI 自动生成的交互式文档。支持在线调试所有 30+ 个 RESTful 接口，含请求/响应模型。</p>
-            <div class="card-tags">
-                <span class="tag tag-tech">Swagger UI</span>
-                <span class="tag tag-tech">OpenAPI 3.0</span>
-                <span class="tag">30+ 接口</span>
-            </div>
-            <span class="card-arrow">→</span>
-        </a>
-
-        <!-- API 体验页面 -->
-        <a href="/demo" target="_blank" class="card card-api-demo">
-            <div class="card-header">
-                <div class="card-icon icon-demo">🖥️</div>
-                <span class="card-status status-ready" id="demoStatus">检测中</span>
-            </div>
-            <h3>🖥️ API 体验页面</h3>
-            <p>可视化数据大屏 + AI 智能查询演示。一键查看销售总览、热销商品、平台占比，直接对话 AI。</p>
-            <div class="card-tags">
-                <span class="tag tag-tech">Vue.js 风格</span>
-                <span class="tag">自动登录</span>
-                <span class="tag">6 大模块</span>
-            </div>
-            <span class="card-arrow">→</span>
-        </a>
-
-        <!-- 监控面板 -->
-        <a href="/monitor" target="_blank" class="card card-monitor">
-            <div class="card-header">
-                <div class="card-icon icon-monitor">📈</div>
-                <span class="card-status status-ready" id="monitorStatus">检测中</span>
-            </div>
-            <h3>📈 系统监控面板</h3>
-            <p>可视化监控仪表盘：运行时长、请求统计、错误率、热门接口排名、组件健康状态、缓存状态。</p>
-            <div class="card-tags">
-                <span class="tag tag-tech">实时刷新</span>
-                <span class="tag tag-tech">可视化</span>
-                <span class="tag">Health Check</span>
-            </div>
-            <span class="card-arrow">→</span>
-        </a>
-
-        <!-- 健康检查面板 -->
-        <a href="/health-panel" target="_blank" class="card card-health">
-            <div class="card-header">
-                <div class="card-icon icon-health">🏥</div>
-                <span class="card-status status-ready" id="healthStatus">检测中</span>
-            </div>
-            <h3>🏥 健康检查面板</h3>
-            <p>可视化健康状态大屏：数据库连接、内存缓存、组件通过率、实时检测时间线、历史记录追踪。</p>
-            <div class="card-tags">
-                <span class="tag tag-tech">可视化面板</span>
-                <span class="tag tag-tech">实时刷新</span>
-                <span class="tag">组件诊断</span>
-            </div>
-            <span class="card-arrow">→</span>
-        </a>
-
+<!-- ================= 指标观察窗 ================= -->
+<section>
+    <h2 class="section-title">只放能复核的数字</h2>
+    <p class="section-sub">每个指标都标注了来源。无法在仓库或 CI 中复核的数字，本页一律不写。</p>
+    <div class="metrics-grid">
+        <div class="metric-card accent-teal rise">
+            <div class="m-label">订单数据</div>
+            <div class="m-value num" data-count="102287">0</div>
+            <div class="m-note">data/cleaned_orders.csv，行数可复核</div>
+        </div>
+        <div class="metric-card accent-blue rise">
+            <div class="m-label">API 操作</div>
+            <div class="m-value num" data-count="32">0</div>
+            <div class="m-note">OpenAPI schema 统计（25 路由 + 应用级端点）</div>
+        </div>
+        <div class="metric-card accent-purple rise">
+            <div class="m-label">评测样本</div>
+            <div class="m-value num"><span data-count="100">0</span><span class="unit">+15+15</span></div>
+            <div class="m-note">路由 100 · 检索 15 · 端到端 15 条金标样本</div>
+        </div>
+        <div class="metric-card accent-orange rise">
+            <div class="m-label">端到端评测（GLM 快照）</div>
+            <div class="m-value num">14<span class="unit">/15 通过 · P50</span> 1,508<span class="unit">ms</span></div>
+            <div class="m-note">结果集断言评测，快照见 eval 报告</div>
+        </div>
+        <div class="metric-card rise">
+            <div class="m-label">pytest 用例</div>
+            <div class="m-value num" id="pytestMetric"><span data-count="238">0</span></div>
+            <div class="m-note">已核实：后端 131 + AI 助手 107（2026-09-02 实际收集）</div>
+        </div>
     </div>
-</div>
+</section>
 
-<div class="footer">
-    AI Commerce Intelligence Platform v1.0.3 &nbsp;|&nbsp;
-    FastAPI + Streamlit + LangChain + MySQL &nbsp;|&nbsp;
-    <a href="https://github.com/super-ZXQ/ai-commerce-intelligence-platform" target="_blank">GitHub</a>
-</div>
+<!-- ================= 真实问题帧 ================= -->
+<section>
+    <h2 class="section-title">四种真实意图，四条真实路径</h2>
+    <p class="section-sub">路由是确定性的：同一类问题永远走同一条路径。安全拦截发生在任何 LLM 调用之前。</p>
+    <div class="frames-grid">
+        <div class="frame-card rise">
+            <span class="f-kind k-data">Data · 数据查询</span>
+            <div class="f-q">「上个月各平台销售额分别是多少？」</div>
+            <div class="f-route">route → <b>load_schema</b> → generate_sql → validate_sql → execute_sql → synthesize<br>意图 <b>data</b> · SQLGlot AST 白名单 · 自动 LIMIT 500</div>
+        </div>
+        <div class="frame-card rise">
+            <span class="f-kind k-knowledge">Knowledge · 知识问答</span>
+            <div class="f-q">「复购率的计算口径是什么？」</div>
+            <div class="f-route">route → <b>retrieve</b>（Chroma + BGE-small-zh，Top-3，阈值 0.4）→ synthesize<br>意图 <b>knowledge</b> · 回答附来源与相似度</div>
+        </div>
+        <div class="frame-card rise">
+            <span class="f-kind k-hybrid">Hybrid · 混合</span>
+            <div class="f-q">「复购率怎么算？顺便算一下上季度的。」</div>
+            <div class="f-route">route → retrieve + load_schema → generate_sql → … → synthesize<br>意图 <b>hybrid</b> · 先给口径，再给数字</div>
+        </div>
+        <div class="frame-card rise">
+            <span class="f-kind k-blocked">Blocked · 安全拦截</span>
+            <div class="f-q">「把 orders 表删掉。」</div>
+            <div class="f-route"><b>input_safety</b> 即拦截，不进入路由、不调用 LLM<br>意图 <b>blocked</b> · 规则层在第一节点生效</div>
+        </div>
+    </div>
+</section>
+
+<!-- ================= 四层防护 ================= -->
+<section>
+    <h2 class="section-title">SQL 安全的四道防线</h2>
+    <p class="section-sub">LLM 生成的每一条 SQL，都必须活着通过这四层才会碰到数据。</p>
+    <div class="guard-grid">
+        <div class="guard-card rise">
+            <div class="g-no">LAYER 1</div>
+            <h3>输入规则</h3>
+            <p><code>input_safety</code> 节点先跑正则与关键词规则，DROP/DELETE/UPDATE 等危险意图在进入 LLM 之前直接拒绝。</p>
+        </div>
+        <div class="guard-card rise">
+            <div class="g-no">LAYER 2</div>
+            <h3>AST 白名单</h3>
+            <p><code>validate_sql</code> 用 <code>SQLGlot</code> 解析语法树，只允许 SELECT；自动补 <code>LIMIT 500</code>，注入 <code>MAX_EXECUTION_TIME(10000)</code>。</p>
+        </div>
+        <div class="guard-card rise">
+            <div class="g-no">LAYER 3</div>
+            <h3>执行拦截器</h3>
+            <p>SQLAlchemy 事件拦截器在执行前二次检查语句类型，失败最多重试 1 次，超限即返回结构化错误。</p>
+        </div>
+        <div class="guard-card rise">
+            <div class="g-no">LAYER 4</div>
+            <h3>只读账号</h3>
+            <p>数据库账号本身只有只读权限——即使前三层全部失守，写操作在 MySQL 层也会被拒绝。</p>
+        </div>
+    </div>
+</section>
+
+<!-- ================= 评测证据 ================= -->
+<section>
+    <h2 class="section-title">评测是断言结果集，不是感觉</h2>
+    <p class="section-sub">端到端评测对查询结果集做断言（行数、列、关键值），而非检查「回答读起来对不对」。</p>
+    <table class="eval-table">
+        <thead>
+            <tr><th>评测集</th><th>规模</th><th>断言方式</th><th>最近结果</th></tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>意图路由</td>
+                <td class="mono-cell">100 条金标样本</td>
+                <td>意图分类精确匹配</td>
+                <td><span class="pass-badge">PASS</span></td>
+            </tr>
+            <tr>
+                <td>知识检索</td>
+                <td class="mono-cell">15 条</td>
+                <td>命中文档 + 相似度阈值 0.4</td>
+                <td><span class="pass-badge">PASS</span></td>
+            </tr>
+            <tr>
+                <td>端到端（GLM 快照）</td>
+                <td class="mono-cell">15 条 · 真实模型调用</td>
+                <td>结果集断言（行/列/关键值）</td>
+                <td><span class="pass-badge">14/15</span> <span class="mono-cell" style="color: var(--ink-3);">P50 1,508ms · P95 8,941ms · 6,894 tokens</span></td>
+            </tr>
+            <tr>
+                <td>单元 / 集成测试</td>
+                <td class="mono-cell">238 条（后端 131 + AI 助手 107）</td>
+                <td>pytest 收集数</td>
+                <td><span class="pass-badge">238 已核实</span> <span style="color: var(--ink-3); font-size: 12px;">后端 131 + AI 助手 107，2026-09-02 本地实际收集</span></td>
+            </tr>
+        </tbody>
+    </table>
+</section>
+
+<!-- ================= BI 与 RFM ================= -->
+<section>
+    <h2 class="section-title">同一份数据，另一副面孔：BI 看板</h2>
+    <p class="section-sub">首页负责「说服」，看板负责「干活」。BI 侧是浅色数据工作台：销售总览、趋势、平台占比与 RFM 八层客户分层（Streamlit + Plotly）。</p>
+    <div class="rfm-strip">
+        <span class="rfm-chip"><i style="background:#1565C0"></i>重要价值客户</span>
+        <span class="rfm-chip"><i style="background:#1E88E5"></i>重要发展客户</span>
+        <span class="rfm-chip"><i style="background:#1E88E5"></i>重要保持客户</span>
+        <span class="rfm-chip"><i style="background:#FF5722"></i>重要挽留客户</span>
+        <span class="rfm-chip"><i style="background:#43A047"></i>一般价值客户</span>
+        <span class="rfm-chip"><i style="background:#43A047"></i>一般发展客户</span>
+        <span class="rfm-chip"><i style="background:#43A047"></i>一般保持客户</span>
+        <span class="rfm-chip"><i style="background:#7E57C2"></i>一般挽留客户</span>
+    </div>
+    <div class="cta-row" style="margin-top: 24px;">
+        <a class="btn btn-ghost" href="/BI/" target="_blank">打开 BI 看板（浅色工作台）</a>
+    </div>
+</section>
+
+<!-- ================= 架构 ================= -->
+<section>
+    <h2 class="section-title">一套 Runtime，两个前端</h2>
+    <div class="arch-box rise"><span class="c-dim"># Nginx :80 统一入口</span>
+/          → <span class="c-blue">FastAPI</span>  ← 本页（作品集门面）
+/BI/      → <span class="c-teal">Streamlit :8501</span>  BI 看板（Operate · 浅色）
+/ai/      → <span class="c-purple">AI 助手 :8502</span>   对话式分析（Operate · 轨迹面板）
+/api/*    → <span class="c-blue">FastAPI :8000</span>   32 个 RESTful 操作（JWT）
+/docs     → Swagger UI（Read · 保持可用）
+
+<span class="c-dim"># 共享 Agent Runtime（agent_core/runtime.py）</span>
+<span class="c-orange">input_safety</span> → load_history → <span class="c-blue">route</span> → <span class="c-purple">retrieve</span> / load_schema
+  → <span class="c-teal">generate_sql → validate_sql → execute_sql</span> → synthesize → save_session → finalize
+
+<span class="c-dim"># 数据与基础设施</span>
+MySQL 8（只读账号） · Redis 7（缓存/会话） · Chroma + BGE-small-zh-v1.5（RAG）</div>
+</section>
+
+<!-- ================= 全部入口 ================= -->
+<section>
+    <h2 class="section-title">全部入口</h2>
+    <div class="entry-grid">
+        <a class="entry-card rise" href="/BI/" target="_blank">
+            <h3>BI 数据看板</h3>
+            <p>销售总览、趋势、平台占比、RFM 客户分层，多维交叉筛选。</p>
+            <span class="e-path">/BI/ · Streamlit + Plotly</span>
+        </a>
+        <a class="entry-card rise" href="/ai/" target="_blank">
+            <h3>AI 分析助手</h3>
+            <p>自然语言查数，意图路由 + Text-to-SQL + RAG，轨迹可观测。</p>
+            <span class="e-path">/ai/ · 共享 Agent Runtime</span>
+        </a>
+        <a class="entry-card rise" href="/docs" target="_blank">
+            <h3>API 文档</h3>
+            <p>Swagger UI 在线调试全部 32 个 RESTful 操作。</p>
+            <span class="e-path">/docs · OpenAPI 3</span>
+        </a>
+        <a class="entry-card rise" href="/demo" target="_blank">
+            <h3>API 体验页</h3>
+            <p>可视化大屏 + AI 查询演示，免登直接体验。</p>
+            <span class="e-path">/demo</span>
+        </a>
+        <a class="entry-card rise" href="/monitor" target="_blank">
+            <h3>监控面板</h3>
+            <p>请求统计、错误率、热门接口、组件健康与缓存状态。</p>
+            <span class="e-path">/monitor · 实时刷新</span>
+        </a>
+        <a class="entry-card rise" href="/health-panel" target="_blank">
+            <h3>健康面板</h3>
+            <p>数据库连接、组件通过率、检测时间线与历史记录。</p>
+            <span class="e-path">/health-panel</span>
+        </a>
+    </div>
+</section>
+
+<!-- ================= 本地运行 ================= -->
+<section>
+    <h2 class="section-title">本地跑起来</h2>
+    <div class="run-steps">
+        <div class="run-step">
+            <span class="rs-no">01</span>
+            <div class="rs-body">
+                <div class="rs-title">Docker 一键启动（推荐）</div>
+                <code>docker-compose up -d
+# Nginx 统一入口 http://localhost （/ /BI/ /ai/ /api/* /docs）</code>
+            </div>
+        </div>
+        <div class="run-step">
+            <span class="rs-no">02</span>
+            <div class="rs-body">
+                <div class="rs-title">本地开发（直连模式，三端口）</div>
+                <code>.venv\Scripts\python.exe -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
+.venv\Scripts\streamlit.exe run streamlit_app.py --server.port 8501
+.venv\Scripts\streamlit.exe run ai-ecommerce-assistant/app.py --server.port 8505</code>
+            </div>
+        </div>
+        <div class="run-step">
+            <span class="rs-no">03</span>
+            <div class="rs-body">
+                <div class="rs-title">运行测试与评测</div>
+                <code>.venv\Scripts\python.exe -m pytest ai-ecommerce-assistant/tests -q
+# 端到端评测需配置模型 Key；无 Key 时自动跳过，不伪造结果</code>
+            </div>
+        </div>
+    </div>
+</section>
+
+</main>
+
+<footer class="wrap footer">
+    <span>AI Commerce Intelligence Platform v1.0.3 · FastAPI + Streamlit + LangGraph + MySQL</span>
+    <span><a href="https://github.com/super-ZXQ/ai-commerce-intelligence-platform" target="_blank" rel="noopener">GitHub</a> · <a href="/docs" target="_blank">API</a> · <a href="/monitor" target="_blank">Monitor</a></span>
+</footer>
 
 <script>
-// ====== 粒子背景 ======
-(function initParticles() {
-    const canvas = document.getElementById('particle-canvas');
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    let particles = [];
-    const PARTICLE_COUNT = 60;
-    let mouse = { x: -1000, y: -1000 };
+/* ===== 单步调试器 =====
+   节点名与执行顺序直接对应 agent_core/runtime.py 的 LangGraph 图 */
+const NODES = [
+    { name: "input_safety",  group: "safety", tag: "规则",   note: "正则与关键词规则先行：危险意图在此处直接拒绝，不消耗任何 token。" },
+    { name: "load_history",  group: "sys",    tag: "会话",   note: "从会话存储加载历史消息（thread_id 维度），为路由与合成提供上下文。" },
+    { name: "route",         group: "route",  tag: "路由",   intent: "data", note: "确定性路由：data / knowledge / hybrid / clarification / blocked 五类意图。" },
+    { name: "load_schema",   group: "sql",    tag: "Schema", note: "加载 orders 表结构（order_id, user_name, payment_amount, platform_type, order_date …）供生成器使用。" },
+    { name: "generate_sql",  group: "sql",    tag: "LLM",    sql: true, note: "LLM 生成候选 SQL。" },
+    { name: "validate_sql",  group: "sql",    tag: "AST",    note: "SQLGlot 解析语法树：仅 SELECT 放行；自动补 LIMIT 500，注入 MAX_EXECUTION_TIME(10000)。" },
+    { name: "execute_sql",   group: "sql",    tag: "只读",   note: "只读账号执行；失败最多重试 1 次；返回结构化结果集。" },
+    { name: "synthesize",    group: "route",  tag: "LLM",    note: "把结果集合成为自然语言回答，附来源与 trace。" },
+    { name: "save_session",  group: "sys",    tag: "会话",   note: "写回会话历史，供下一轮对话使用。" },
+    { name: "finalize",      group: "sys",    tag: "收尾",   note: "汇总 trace：节点序列、耗时、token 用量，写入响应。" },
+];
+const DEMO_SQL = '<span class="kw">SELECT</span> platform_type, <span class="fn">SUM</span>(payment_amount) <span class="kw">AS</span> gmv\n<span class="kw">FROM</span> orders\n<span class="kw">WHERE</span> order_date >= <span class="lit">\'2026-08-01\'</span>\n  <span class="kw">AND</span> order_date <  <span class="lit">\'2026-09-01\'</span>\n<span class="kw">GROUP BY</span> platform_type\n<span class="kw">LIMIT</span> <span class="lit">500</span>;';
+const DEMO_SOURCES = [
+    { name: "kpi_formulas.md · GMV 口径", score: "0.71" },
+    { name: "gold_queries.md · 平台销售", score: "0.63" },
+    { name: "schema_orders.md · 表结构", score: "0.58" },
+];
 
-    function resize() {
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
-    }
-    resize();
-    window.addEventListener('resize', resize);
+let cur = -1, autoTimer = null, elapsed = 0;
+const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-    document.addEventListener('mousemove', (e) => {
-        mouse.x = e.clientX;
-        mouse.y = e.clientY;
-    });
-
-    class Particle {
-        constructor() {
-            this.reset();
-        }
-        reset() {
-            this.x = Math.random() * canvas.width;
-            this.y = Math.random() * canvas.height;
-            this.vx = (Math.random() - 0.5) * 0.3;
-            this.vy = (Math.random() - 0.5) * 0.3;
-            this.size = Math.random() * 2 + 0.5;
-            this.alpha = Math.random() * 0.4 + 0.1;
-        }
-        update() {
-            this.x += this.vx;
-            this.y += this.vy;
-            if (this.x < 0 || this.x > canvas.width) this.vx *= -1;
-            if (this.y < 0 || this.y > canvas.height) this.vy *= -1;
-            const dx = mouse.x - this.x;
-            const dy = mouse.y - this.y;
-            const dist = Math.sqrt(dx * dx + dy * dy);
-            if (dist < 150) {
-                this.x -= dx * 0.005;
-                this.y -= dy * 0.005;
-            }
-        }
-        draw() {
-            ctx.beginPath();
-            ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
-            ctx.fillStyle = `rgba(129, 140, 248, ${this.alpha})`;
-            ctx.fill();
-        }
-    }
-
-    for (let i = 0; i < PARTICLE_COUNT; i++) particles.push(new Particle());
-
-    function connectParticles() {
-        for (let i = 0; i < particles.length; i++) {
-            for (let j = i + 1; j < particles.length; j++) {
-                const dx = particles[i].x - particles[j].x;
-                const dy = particles[i].y - particles[j].y;
-                const dist = Math.sqrt(dx * dx + dy * dy);
-                if (dist < 120) {
-                    ctx.beginPath();
-                    ctx.strokeStyle = `rgba(129, 140, 248, ${0.06 * (1 - dist / 120)})`;
-                    ctx.lineWidth = 0.5;
-                    ctx.moveTo(particles[i].x, particles[i].y);
-                    ctx.lineTo(particles[j].x, particles[j].y);
-                    ctx.stroke();
-                }
-            }
-        }
-    }
-
-    function animate() {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        particles.forEach(p => { p.update(); p.draw(); });
-        connectParticles();
-        requestAnimationFrame(animate);
-    }
-    animate();
-})();
-
-// ====== GSAP 入场动画（仅头部元素）======
-gsap.registerPlugin(ScrollTrigger);
-
-document.addEventListener('DOMContentLoaded', () => {
-    try {
-        const tl = gsap.timeline({ defaults: { ease: 'power3.out' } });
-
-        // Logo 入场
-        tl.from('.logo-icon', {
-            scale: 0, rotation: -180, duration: 0.8, ease: 'back.out(1.7)'
-        });
-
-        // 标题组
-        tl.from('.title-group', {
-            x: -30, opacity: 0, duration: 0.6
-        }, '-=0.3');
-
-        // Hero 标题
-        tl.from('.hero h2', {
-            y: 30, opacity: 0, duration: 0.8
-        }, '-=0.2');
-
-        // Hero 描述
-        tl.from('.hero p', {
-            y: 20, opacity: 0, duration: 0.6
-        }, '-=0.4');
-
-        // 页脚
-        tl.from('.footer', {
-            opacity: 0, y: 20, duration: 0.5
-        }, '-=0.2');
-    } catch(e) {
-        console.warn('GSAP animation failed:', e);
-    }
+const nodeList = document.getElementById("nodeList");
+NODES.forEach((n, i) => {
+    const div = document.createElement("div");
+    div.className = "node group-" + n.group;
+    div.id = "node-" + i;
+    div.innerHTML = '<span class="step-no">' + String(i + 1).padStart(2, "0") + '</span>' +
+                    '<span class="node-name">' + n.name + '</span>' +
+                    '<span class="node-tag">' + n.tag + '</span>';
+    nodeList.appendChild(div);
 });
 
-// ====== 状态徽章弹跳 ======
-function animateStatusBadge(elementId, isSuccess) {
-    const el = document.getElementById(elementId);
-    if (!el) return;
-    gsap.fromTo(el, { scale: 0.5, opacity: 0 }, {
-        scale: 1, opacity: 1, duration: 0.5, ease: 'back.out(2)'
+function setCurrent(idx) {
+    cur = idx;
+    NODES.forEach((n, i) => {
+        const el = document.getElementById("node-" + i);
+        el.classList.toggle("done", i < idx);
+        el.classList.toggle("current", i === idx);
     });
-}
-
-// ====== API 服务检查 ======
-const BASE = window.location.origin;
-
-async function checkService(url, elementId) {
-    const el = document.getElementById(elementId);
-    if (!el) return;
-    try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 8000);
-        const r = await fetch(url, { method: 'GET', signal: controller.signal });
-        clearTimeout(timer);
-        el.textContent = '✅ 运行中';
-        el.className = 'card-status status-ready';
-        animateStatusBadge(elementId, true);
-    } catch(e) {
-        el.textContent = '❌ 未启动';
-        el.className = 'card-status status-manual';
-        animateStatusBadge(elementId, false);
+    const n = NODES[idx];
+    if (!n) return;
+    document.getElementById("inspNode").textContent = n.name;
+    document.getElementById("fieldIntent").style.display = n.intent ? "" : "none";
+    if (n.intent) document.getElementById("inspIntent").textContent = n.intent;
+    document.getElementById("fieldSql").style.display = n.sql ? "" : "none";
+    if (n.sql) document.getElementById("inspSql").innerHTML = DEMO_SQL;
+    document.getElementById("fieldSrc").style.display = (idx === 2) ? "" : "none";
+    if (idx === 2) {
+        document.getElementById("inspSrc").innerHTML = DEMO_SOURCES.map(s =>
+            '<div class="src-item"><span>' + s.name + '</span><span class="score">' + s.score + '</span></div>'
+        ).join("");
     }
+    document.getElementById("fieldNote").style.display = n.note ? "" : "none";
+    document.getElementById("inspNote").textContent = n.note || "";
+    document.getElementById("inspUsage").style.display = (idx >= 4) ? "flex" : "none";
+    if (idx >= 4) {
+        document.getElementById("uTok").textContent = idx >= 7 ? "6,894" : "3,120";
+        document.getElementById("uLat").textContent = idx >= 7 ? "1,508 ms" : "920 ms";
+        document.getElementById("uRet").textContent = "0";
+    }
+    elapsed = idx >= 0 ? Math.round((idx + 1) * 150.8) : 0;
+    document.getElementById("sbSteps").textContent = (idx + 1) + " / " + NODES.length;
+    document.getElementById("sbElapsed").textContent = elapsed.toLocaleString() + " ms";
+    const curEl = document.getElementById("node-" + idx);
+    if (hasInteracted && curEl && curEl.scrollIntoView) curEl.scrollIntoView({ block: "nearest", behavior: reduced ? "auto" : "smooth" });
 }
 
-async function init() {
-    await Promise.allSettled([
-        checkService(BASE + '/docs', 'docsStatus'),
-        checkService(BASE + '/demo', 'demoStatus'),
-        checkService(BASE + '/monitor', 'monitorStatus'),
-        checkService(BASE + '/health-panel', 'healthStatus'),
-        checkService(BASE + '/health', null),
-    ]);
+function stopAuto() {
+    if (autoTimer) { clearInterval(autoTimer); autoTimer = null; }
+    document.getElementById("btnAuto").textContent = "自动播放";
+}
 
-    try {
-        const ext = await fetch(BASE + '/api/monitor/services-status', { signal: AbortSignal.timeout(8000) });
-        const data = await ext.json();
-        const biEl = document.getElementById('biStatus');
-        const aiEl = document.getElementById('aiStatus');
-        if (biEl) {
-            const s = data.bi_dashboard || {};
-            biEl.textContent = s.status === 'ok' ? '✅ 运行中' : '❌ 未启动';
-            biEl.className = 'card-status ' + (s.status === 'ok' ? 'status-ready' : 'status-manual');
-            animateStatusBadge('biStatus', s.status === 'ok');
-        }
-        if (aiEl) {
-            const s = data.ai_assistant || {};
-            aiEl.textContent = s.status === 'ok' ? '✅ 运行中' : '❌ 未启动';
-            aiEl.className = 'card-status ' + (s.status === 'ok' ? 'status-ready' : 'status-manual');
-            animateStatusBadge('aiStatus', s.status === 'ok');
-        }
-    } catch(e) {
-        ['biStatus', 'aiStatus'].forEach(id => {
-            const el = document.getElementById(id);
-            if (el) { el.textContent = '❌ 未启动'; el.className = 'card-status status-manual'; }
+document.getElementById("btnStep").addEventListener("click", () => {
+    hasInteracted = true;
+    stopAuto();
+    setCurrent(cur + 1 >= NODES.length ? 0 : cur + 1);
+});
+document.getElementById("btnReset").addEventListener("click", () => { hasInteracted = true; stopAuto(); setCurrent(0); });
+document.getElementById("btnAuto").addEventListener("click", () => {
+    hasInteracted = true;
+    if (autoTimer) { stopAuto(); return; }
+    if (cur >= NODES.length - 1) setCurrent(-1);
+    document.getElementById("btnAuto").textContent = "暂停";
+    autoTimer = setInterval(() => {
+        if (cur + 1 >= NODES.length) { stopAuto(); return; }
+        setCurrent(cur + 1);
+    }, 900);
+});
+
+/* 初始状态：reduced-motion 直接展示终态，否则停在第一节点等待交互 */
+setCurrent(reduced ? NODES.length - 1 : 0);
+
+/* ===== 指标计数动画（进入视口才播放）===== */
+const counters = document.querySelectorAll("[data-count]");
+if (reduced) {
+    counters.forEach(el => { el.textContent = Number(el.dataset.count).toLocaleString(); });
+} else {
+    const io = new IntersectionObserver((entries) => {
+        entries.forEach(e => {
+            if (!e.isIntersecting) return;
+            const el = e.target, target = Number(el.dataset.count), t0 = performance.now(), dur = 1100;
+            (function tick(t) {
+                const p = Math.min((t - t0) / dur, 1);
+                el.textContent = Math.round(target * (1 - Math.pow(1 - p, 3))).toLocaleString();
+                if (p < 1) requestAnimationFrame(tick);
+            })(t0);
+            io.unobserve(el);
         });
-    }
-
-    const apiEl = document.getElementById('apiStatus');
-    if (apiEl) {
-        try {
-            const r = await fetch(BASE + '/health', { signal: AbortSignal.timeout(2000) });
-            if (r.ok) {
-                apiEl.innerHTML = '<span class="dot online"></span><span>API 在线</span>';
-            } else {
-                apiEl.innerHTML = '<span class="dot"></span><span>API 异常</span>';
-            }
-        } catch(e) {
-            apiEl.innerHTML = '<span class="dot"></span><span>API 离线</span>';
-        }
-    }
+    }, { threshold: 0.4 });
+    counters.forEach(el => io.observe(el));
 }
 
-init();
-setInterval(init, 15000);
+/* ===== 入场渐显 ===== */
+const riseEls = document.querySelectorAll(".rise");
+if (reduced) {
+    riseEls.forEach(el => el.classList.add("in"));
+} else {
+    const rio = new IntersectionObserver((entries) => {
+        entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add("in"); rio.unobserve(e.target); } });
+    }, { threshold: 0.15 });
+    riseEls.forEach(el => rio.observe(el));
+}
+
+/* ===== 服务状态轮询（15s）===== */
+const BASE = window.location.origin;
+function setDot(id, ok) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.className = "dot " + (ok ? "online" : "offline");
+}
+async function refreshStatus() {
+    try {
+        const r = await fetch(BASE + "/health", { signal: AbortSignal.timeout(5000) });
+        setDot("dotApi", r.ok);
+    } catch (e) { setDot("dotApi", false); }
+    try {
+        const r = await fetch(BASE + "/api/monitor/services-status", { signal: AbortSignal.timeout(8000) });
+        const d = await r.json();
+        setDot("dotBi", (d.bi_dashboard || {}).status === "ok");
+        setDot("dotAi", (d.ai_assistant || {}).status === "ok");
+    } catch (e) {
+        setDot("dotBi", false); setDot("dotAi", false);
+    }
+}
+refreshStatus();
+setInterval(refreshStatus, 15000);
 </script>
 </body>
 </html>
