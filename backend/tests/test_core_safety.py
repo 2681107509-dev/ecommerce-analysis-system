@@ -28,6 +28,10 @@ from backend.utils.sql_guard import is_read_only_sql
     "SELECT /*+ MAX_EXECUTION_TIME(10000) */ SUM(payment_amount) FROM orders LIMIT 500",
     "SELECT ';' AS value",
     "SELECT '-- not a comment' AS value",
+    # SQLAlchemy Inspector 在 MySQL 上反射表结构的只读语句，必须放行
+    "SHOW CREATE TABLE orders",
+    "SHOW CREATE TABLE `orders`",
+    "SHOW CREATE VIEW order_summary",
 ])
 def test_read_only_sql_accepts_queries(sql):
     assert is_read_only_sql(sql)
@@ -43,6 +47,9 @@ def test_read_only_sql_accepts_queries(sql):
     "SELECT '--'; DROP TABLE orders",
     "SELECT '/*'; DELETE FROM orders",
     "SELECT SLEEP(10)",
+    # 反射语句放行不等于放宽黑名单：多语句与其他 CREATE 变体依然拦截
+    "SHOW CREATE TABLE orders; DROP TABLE orders",
+    "SHOW CREATE PROCEDURE calc_revenue",
 ])
 def test_read_only_sql_blocks_mutation_and_side_effects(sql):
     assert not is_read_only_sql(sql)

@@ -6,6 +6,7 @@ import asyncio
 import re
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import asdict
 from typing import Any, TypedDict
 from uuid import uuid4
 
@@ -19,6 +20,7 @@ from agent_core.sql_safety import (
     validate_and_limit_sql,
 )
 from agent_core.routing import classify_intent
+from agent_core.streaming import reset_token_hook, set_token_hook
 
 Retriever = Callable[[str], Awaitable[list[AgentSource]]]
 SchemaLoader = Callable[[], Awaitable[str]]
@@ -384,3 +386,43 @@ class AgentRuntime:
                 "sources": [], "rows": [], "started_at": time.perf_counter(),
             }
         )
+
+    async def astream(
+        self,
+        query: str,
+        *,
+        owner: str = "anonymous",
+        thread_id: str | None = None,
+        on_step: Callable[[dict[str, Any]], None] | None = None,
+        on_token: Callable[[str], None] | None = None,
+    ) -> RuntimeState:
+        """流式执行：每个节点完成即回调 on_step(步骤 dict)。
+
+        on_token 经 ContextVar 传递给 answer 生成方（见 agent_core.streaming），
+        调用端注入的回调签名保持不变。返回值与 invoke() 完全一致，
+        调用方的后处理逻辑无需区分流式 / 非流式。
+        """
+        hook_token = set_token_hook(on_token) if on_token is not None else None
+        try:
+            state: RuntimeState = {
+                "query": query.strip(), "owner": owner, "request_id": str(uuid4()),
+                "thread_id": thread_id or str(uuid4()), "steps": [], "retry_count": 0,
+                "sources": [], "rows": [], "started_at": time.perf_counter(),
+            }
+            emitted = 0
+            # stream_mode="updates" 逐节点产出增量；RuntimeState 无 reducer，
+            # 每个 update 的 "steps" 都是全量列表，用 emitted 游标只下发新步骤。
+            async for update in self._graph.astream(state, stream_mode="updates"):
+                for node_update in update.values():
+                    if not isinstance(node_update, dict):
+                        continue
+                    state.update(node_update)
+                    if on_step is not None:
+                        steps = node_update.get("steps") or []
+                        for step in steps[emitted:]:
+                            on_step(asdict(step))
+                        emitted = max(emitted, len(steps))
+            return state
+        finally:
+            if hook_token is not None:
+                reset_token_hook(hook_token)

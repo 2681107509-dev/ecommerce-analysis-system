@@ -49,6 +49,12 @@ test_*.json
 # 工具内部计划文件（不入库）
 .zcode/
 .workbuddy-ai/
+.workbuddy/
+.codex/
+
+# CI 日志离线排查产物（不入库）
+ci-logs/
+ci-logs.zip
 
 # 宣传视频仅保留可复现源码；依赖、渲染产物和临时分析不入库
 video-promo/node_modules/

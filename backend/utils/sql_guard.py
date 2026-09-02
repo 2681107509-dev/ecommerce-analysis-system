@@ -28,6 +28,9 @@ _FORBIDDEN_SELECT_PATTERNS = re.compile(
     r"\b(?:LOAD_FILE|SLEEP|BENCHMARK)\s*\(",
     re.IGNORECASE,
 )
+# SQLAlchemy Inspector 在 MySQL 上反射表结构时发出的只读元数据语句，
+# 必须放行，否则 describe_table 会被 CREATE 关键字黑名单误伤
+_SHOW_CREATE_METADATA = re.compile(r"\bSHOW\s+CREATE\s+(?:TABLE|VIEW)\b", re.IGNORECASE)
 
 
 def _strip_literals_and_comments(sql: str) -> str:
@@ -99,6 +102,9 @@ def is_read_only_sql(sql: str) -> bool:
     first_match = re.match(r"([A-Za-z]+)", cleaned)
     if not first_match or first_match.group(1).upper() not in _ALLOWED_PREFIXES:
         return False
+    # 先剔除 SHOW CREATE TABLE/VIEW 反射语句再做黑名单检查：
+    # 其余语句（含 SHOW CREATE PROCEDURE 等）中的 CREATE 关键字依然被拦截
+    cleaned = _SHOW_CREATE_METADATA.sub(" ", cleaned)
     if _FORBIDDEN_KEYWORDS.search(cleaned):
         return False
     return not _FORBIDDEN_SELECT_PATTERNS.search(cleaned)
