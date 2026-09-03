@@ -453,6 +453,12 @@ python -m pytest ai-ecommerce-assistant/tests/ -v
 
 AI/RAG 测试不依赖真实 BGE 模型，用 `tests/conftest.py` 里的 `FakeEmbeddings` 生成确定性归一化向量。
 
+**测试规模（实收，非估填）：** 仓库共定义 **208** 个测试函数（`backend/tests` 107 + `ai-ecommerce-assistant/tests` 101）。
+本机可执行验证结果：
+- `backend` 套件执行 **144** 用例（127 通过，17 项因无本地 MySQL 连接报 `1045 Access denied` 失败——属环境依赖，非代码回归；CI 中由 `init_ci_schema.py` 建表后全绿）。
+- `ai-ecommerce-assistant` 套件中仅 `test_lazy_rag.py`（**5** 项）在本环境可收集执行并通过；其余 7 个模块依赖 `langchain_huggingface`（本环境未安装）无法收集，CI 中具备 Embedding 依赖时运行。
+- 前端：`backend/static/index.html` 拆分为 `css/studio.css` + `js/studio.js`，并经 Impeccable detector（0 critical/0 error）与桌面三视口（1366×768 / 1440×900 / 1920×1080）验收 `badCount=0`。
+
 ### 安全边界
 
 - LLM 生成 SQL 在显式执行和 SQLAlchemy Engine 执行前都会经过单语句只读校验，拦截写操作、文件读取/导出、存储过程和延时函数。
@@ -542,7 +548,7 @@ ai-commerce-intelligence-platform/
 │   ├── scripts/                  # CI / 工具脚本
 │   │   ├── init_ci_schema.py     # CI 建表 + 5 条 fake orders seed
 │   │   └── sync_orders.py        # CSV 哈希校验 + 原子换表
-│   ├── tests/                    # API 单元测试
+│   ├── tests/                    # 107 项 API 单元测试
 │   ├── requirements.txt          # 后端生产依赖
 │   └── requirements-dev.txt      # 后端测试与静态检查依赖
 ├── streamlit_app.py              # BI 数据看板（Streamlit 多页面）
@@ -558,7 +564,7 @@ ai-commerce-intelligence-platform/
 │   │   ├── tools.py              # LangChain Tool 工厂
 │   │   ├── extractor.py          # 来源还原（无 streamlit 依赖）
 │   │   └── metrics.py            # 跨进程 stats 共享 + Prometheus 渲染 + JSONL 事件
-│   ├── tests/                    # 107 项 AI/RAG 测试
+│   ├── tests/                    # 101 项 AI/RAG 测试
 │   ├── eval/                     # 评估集 + 评估脚本
 │   ├── data/chroma/              # Chroma 持久化目录
 │   ├── pytest.ini                # pytest 配置

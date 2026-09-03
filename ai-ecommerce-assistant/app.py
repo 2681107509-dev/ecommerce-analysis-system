@@ -1,6 +1,4 @@
 import asyncio
-import datetime
-import decimal
 import hashlib
 import html
 import json
@@ -14,8 +12,6 @@ from urllib.parse import quote_plus
 from uuid import uuid4
 
 import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
 import streamlit as st
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
@@ -26,7 +22,18 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 # 业务知识来源抽取（无 streamlit 依赖，便于单元测试）
-from rag import metrics as rag_metrics
+# 注意：rag.* 子模块的顶层 import 会立刻拉起 BGE + Chroma（embedding + 持久化客户端），
+# 严重拖慢 Streamlit 冷启动。RAG 仅在知识类问题处理路径才需要，
+# 因此把 from rag import metrics 挪到使用处（条件块内）——首次启用事件落盘时才付代价。
+
+from assistant_charts import create_chart
+from assistant_text_utils import (
+    _convert_value,
+    clean_sql_local,
+    parse_data_from_answer,
+    strip_garbled_content,
+    strip_markdown_tables,
+)
 
 from agent_core import AgentRuntime
 from agent_core.db_schema import describe_table
@@ -38,7 +45,7 @@ from backend.utils.sql_guard import (
     ensure_read_only_sql,
     guard_read_only_engine,
 )
-from backend.utils.text_cleaner import clean_sql, sanitize_error
+from backend.utils.text_cleaner import sanitize_error
 
 load_dotenv(os.path.join(_PROJECT_ROOT, ".env"))
 
@@ -52,6 +59,7 @@ FEEDBACK_LOG_PATH = os.environ.get(
 
 # 启用 RAG 事件 JSONL 落盘（默认关闭磁盘 IO，避免拖慢；可由环境变量开启）
 if os.environ.get("RAG_EVENTS_LOG", "0") == "1":
+    from rag import metrics as rag_metrics  # 仅在真正启用时付一次导入代价
     rag_metrics.enable_event_file_logging()
 
 
@@ -394,6 +402,52 @@ def init_retriever():
         }
 
 
+class _LazyRetriever:
+    """RAG 检索器懒加载代理。
+
+    关键设计：模块顶层 import app.py 时不会拉起 BGE/Chromadb。
+    真正的初始化只发生在首次 knowledge 类问题触发 retrieve() 调用时。
+    - status：与 init_retriever 的 status_dict 同形，但 ok=False 时 count=0
+    - get_stats()：未初始化时返回空 dict（避免 NoneType 报错）
+    - dump_stats()：未初始化时 no-op
+    - retrieve()：未初始化时返回空列表（与旧逻辑 "if _retriever is None: return []" 对齐）
+    """
+    def __init__(self):
+        self._inner = None
+        self.status = {"ok": False, "error": "not initialized yet", "count": 0}
+        self._initialized = False
+
+    def _ensure(self):
+        if self._initialized:
+            return
+        self._initialized = True
+        try:
+            inner, status = init_retriever()
+            self._inner = inner
+            self.status = status
+        except Exception as e:
+            logger.error("RAG 懒加载失败: %s", e)
+            self.status = {"ok": False, "error": str(e), "count": 0}
+            self._inner = None
+
+    def retrieve(self, query: str, k: int = 3):
+        self._ensure()
+        if self._inner is None:
+            return []
+        return self._inner.retrieve(query, k=k)
+
+    def get_stats(self) -> dict:
+        self._ensure()
+        if self._inner is None:
+            return {}
+        return self._inner.get_stats()
+
+    def dump_stats(self) -> None:
+        self._ensure()
+        if self._inner is not None:
+            self._inner.dump_stats()
+
+
 def get_session_runtime(_engine, _retriever):
     """按当前 Streamlit 会话创建共享 Runtime；API Key 不进入全局缓存。"""
     api_key = st.session_state.get("model_api_key", "").strip()
@@ -513,426 +567,8 @@ def render_setup_guide(db_engine) -> None:
     """, unsafe_allow_html=True)
 
 
-def detect_chart_type(df: pd.DataFrame, question: str = "") -> str:
-    if df is None or len(df) == 0 or len(df.columns) < 2:
-        return "none"
-    
-    col1, col2 = df.columns[0], df.columns[1]
-    
-    try:
-        pd.to_numeric(df[col2], errors='raise')
-    except (ValueError, TypeError):
-        return "none"
-    
-    question_lower = question.lower()
-    col1_lower = col1.lower()
-    col2_lower = col2.lower() if col2 else ""
-    
-    rank_keywords = ['top', '最高', '排名', '排行', r'前\d+', '销量最高', '销售额最高']
-    if any(re.search(k, question_lower) for k in rank_keywords):
-        return "bar"
-    
-    compare_keywords = ['哪个', '谁', '比较', '对比', 'vs', '更多', '更高', '更低', '差异']
-    if any(k in question_lower for k in compare_keywords):
-        return "bar"
-    
-    rate_keywords = ['退款率', '转化率', '点击率', '复购率', 'rate', 'ratio', '比例对比', '各.*率']
-    if any(k in question_lower for k in rate_keywords) or \
-       (any(k in col2_lower for k in ['rate', 'ratio', '率']) and len(df) > 2):
-        return "bar_h"
-    
-    first_col_str = df[col1].astype(str)
-    
-    is_date_format = first_col_str.str.match(r'^\d{4}-\d{2}-\d{2}').any() or \
-                     first_col_str.str.match(r'^\d{2}/\d{2}').any() or \
-                     (first_col_str.str.contains(r'^(0?[1-9]|1[0-9]|2[0-3])$', regex=True).any() and len(df) >= 12)
-    
-    time_col_names = ['date', '时间', 'time', 'hour', 'weekday', '星期', 'month', '月', 'order_date', 'order_hour']
-    
-    time_keywords = ['每天', '每日', '趋势', '变化', '时间段', '24小时', '最近', '周', '月份']
-    if is_date_format or \
-       (any(k in col1_lower for k in time_col_names)) or \
-       (any(k in question_lower for k in time_keywords) and not any(k in question_lower for k in ['top', '最高'])):
-        return "line"
-    
-    share_keywords = ['占比', '份额', '构成', '组成', '分布情况', 'percent of total']
-    if any(k in question_lower for k in share_keywords) and len(df) <= 8:
-        return "pie"
-    
-    if len(df) <= 4:
-        return "pie"
-    
-    return "bar"
 
 
-_CHART_SEQUENCE = ["#1565C0", "#14B8A6", "#F97316", "#8B5CF6", "#64748B"]
-_CHART_FONT = {
-    "family": "Manrope, Noto Sans SC, Microsoft YaHei, sans-serif",
-    "size": 13,
-    "color": "#334155",
-}
-_CHART_HOVERLABEL = {
-    "bgcolor": "#0F172A",
-    "bordercolor": "#0F172A",
-    "font": {
-        "family": "Manrope, Noto Sans SC, Microsoft YaHei, sans-serif",
-        "size": 12,
-        "color": "#F8FAFC",
-    },
-}
-
-
-def create_chart(df: pd.DataFrame, title: str = "", question: str = "") -> go.Figure | None:
-    chart_type = detect_chart_type(df, question)
-    
-    if chart_type == "none":
-        return None
-
-    cols = df.columns.tolist()
-    x_col, y_col = cols[0], cols[1]
-
-    if not title or title == "undefined" or not title.strip():
-        title = f"{y_col} 分析"
-
-    if chart_type == "line":
-        fig = px.line(df, x=x_col, y=y_col, template="plotly_white", title=title,
-                      markers=True, color_discrete_sequence=[_CHART_SEQUENCE[0]])
-        fig.update_traces(line_width=3, marker_size=8,
-                          fill='tozeroy', fillcolor='rgba(21,101,192,0.08)')
-        fig.add_scatter(x=df[x_col], y=df[y_col], mode='markers',
-                        marker={"size": 9, "color": _CHART_SEQUENCE[1], "line": {"width": 2, "color": '#FFFFFF'}},
-                        showlegend=False)
-
-    elif chart_type == "pie":
-        fig = px.pie(df, names=x_col, values=y_col, template="plotly_white", title=title,
-                     hole=0.42, color_discrete_sequence=_CHART_SEQUENCE)
-        fig.update_traces(textposition='inside', textinfo='percent+label',
-                          textfont={"size": 12, "color": '#0F172A'},
-                          hovertemplate='<b>%{label}</b><br>数值: %{value:,.2f}<br>占比: %{percent}<extra></extra>',
-                          pull=[0.015] * len(df))
-
-    elif chart_type in ["bar_h", "bar"]:
-        df_plot = df.copy()
-
-        try:
-            df_plot[y_col] = pd.to_numeric(df_plot[y_col], errors='coerce')
-        except Exception:
-            pass
-
-        if len(df_plot) > 8:
-            df_plot = df_plot.nlargest(8, columns=y_col).reset_index(drop=True)
-
-        n_items = len(df_plot)
-        # 受控蓝青色板：高值用主蓝，低值逐步降为浅蓝，避免高饱和红色误导风险语义。
-        bar_colors = ['#1565C0', '#1E88E5', '#42A5F5', '#64B5F6',
-                      '#90CAF9', '#BBDEFB', '#D6E8FB', '#EAF3FC']
-
-        def format_y_label(val):
-            val_str = str(val).strip()
-            if val_str.isdigit():
-                hour_val = int(val_str)
-                if 0 <= hour_val <= 23:
-                    return f"{hour_val}时"
-                elif hour_val >= 1 and hour_val <= 31:
-                    return f"{hour_val}日"
-            return val_str
-
-        # 计算合适的图表高度：每项至少 85px + 标题区 + 边距，让条形更显著
-        dynamic_height = max(550, 140 + n_items * 85)
-
-        if chart_type == "bar_h":
-            fig = go.Figure()
-            for i in range(n_items):
-                y_val = df_plot[y_col].iloc[i]
-                x_raw = df_plot[x_col].iloc[i]
-                x_label = format_y_label(x_raw)
-                try:
-                    y_num = float(y_val)
-                    y_text = f'{y_num:,.0f}'
-                except (ValueError, TypeError):
-                    y_num = 0
-                    y_text = str(y_val)
-
-                fig.add_trace(go.Bar(
-                    x=[y_num],
-                    y=[x_label],
-                    orientation='h',
-                    name=x_label,
-                    marker={
-                        "color": bar_colors[i % len(bar_colors)],
-                        "line": {"width": 0, "color": 'rgba(255,255,255,0)'},
-                        "cornerradius": 4,
-                    },
-                    text=y_text,
-                    textposition='outside',
-                    textfont={"size": 13, "color": '#334155', "family": 'JetBrains Mono, monospace'},
-                    hovertemplate=f'<b>{x_label}</b><br>%{{x:,.0f}}<extra></extra>',
-                ))
-
-            fig.update_layout(height=dynamic_height, barmode='group')
-
-        else:
-            df_sorted = df_plot.sort_values(by=y_col, ascending=True).reset_index(drop=True)
-            fig = go.Figure()
-            for i in range(n_items):
-                y_val = df_sorted[y_col].iloc[i]
-                x_raw = df_sorted[x_col].iloc[i]
-                x_label = format_y_label(x_raw)
-                try:
-                    y_num = float(y_val)
-                    y_text = f'{y_num:,.0f}'
-                except (ValueError, TypeError):
-                    y_num = 0
-                    y_text = str(y_val)
-
-                fig.add_trace(go.Bar(
-                    x=[y_num],
-                    y=[x_label],
-                    orientation='h',
-                    name=x_label,
-                    marker={
-                        "color": bar_colors[(n_items - 1 - i) % len(bar_colors)],
-                        "line": {"width": 0, "color": 'rgba(255,255,255,0)'},
-                        "cornerradius": 4,
-                    },
-                    text=y_text,
-                    textposition='outside',
-                    textfont={"size": 13, "color": '#334155', "family": 'JetBrains Mono, monospace'},
-                    hovertemplate=f'<b>{x_label}</b><br>%{{x:,.0f}}<extra></extra>',
-                ))
-
-            fig.update_layout(height=dynamic_height, barmode='group')
-
-    else:
-        fig = go.Figure()
-
-    fig.update_layout(
-        title={"text": title, "x": 0.02, "xanchor": 'left', "y": 0.97, "yanchor": 'top',
-                   "font": {"size": 17, "color": '#0F172A', "family": _CHART_FONT["family"]}},
-        margin={"l": 80 if chart_type in ["bar_h", "bar"] else 30,
-                    "r": 100 if chart_type in ["bar_h", "bar"] else 30,
-                    "t": 70, "b": 50},
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='#FFFFFF',
-        font=_CHART_FONT,
-        hoverlabel=_CHART_HOVERLABEL,
-        colorway=_CHART_SEQUENCE,
-        showlegend=False,
-        xaxis={
-            "showgrid": False if chart_type in ["bar_h", "bar"] else True,
-            "gridcolor": '#E2E8F0',
-            "linecolor": '#CBD5E1',
-            "zerolinecolor": '#CBD5E1',
-            "showticklabels": False if chart_type in ["bar_h", "bar"] else True,
-            "tickangle": -20 if chart_type == "line" else 0,
-            "tickfont": {"size": 11, "color": '#64748B'},
-            "zeroline": False,
-            "range": [0, None] if chart_type in ["bar_h", "bar"] else None,
-        },
-        yaxis={
-            "showgrid": True,
-            "gridcolor": '#E2E8F0',
-            "linecolor": '#CBD5E1',
-            "zerolinecolor": '#CBD5E1',
-            "tickfont": {"size": 11, "color": '#64748B'},
-        },
-        hovermode='closest',
-        bargap=0.42,
-    )
-
-    return fig
-
-
-def parse_data_from_answer(answer: str) -> pd.DataFrame | None:
-    if not answer or not isinstance(answer, str):
-        return None
-
-    rows = []
-
-    # 模式1：商品编号/平台 + 数值（最精确，优先匹配）
-    # 匹配 "商品编号: PR000385 销售额: 481182" 或 "APP: 201单" 等
-    patterns = [
-        # 商品编号 PRxxxxx + 金额
-        r'(?:^|\n|[-•|])\s*(PR\d{4,})[^\d]*(\d[\d,]*\.?\d*)',
-        # 商品编号: xxx 格式
-        r'(?:商品编号|产品编号|product_id)[^\w]*(PR\d+)[^\d]*(\d[\d,]*\.?\d*)',
-        # 平台类型 + 数值
-        r'(APP|微信公众号|网站|web|小程序|公众号)[^\d]{0,10}(\d[\d,]*\.?\d*)',
-        # 中文键名: 值
-        r'[-•|]\s*([^\d:：\n]{2,20}?)[：:]\s*([￥¥$]?\s*[\d,]+\.?\d*)',
-        # 纯 key: value
-        r'(\w+)\s*[：:]\s*([￥¥$]?\s*[\d,]+\.?\d*)\s*(?:元|单|%|)?',
-    ]
-
-    for pattern in patterns:
-        matches = re.findall(pattern, answer, re.IGNORECASE | re.MULTILINE)
-        if matches and len(matches) >= 2:
-            for match in matches:
-                key = match[0].strip()
-                value_str = re.sub(r'[^\d.]', '', match[1])
-                try:
-                    value = float(value_str) if value_str else None
-                    if value is not None and value > 0 and not _is_garbled_key(key):
-                        rows.append({'name': key, 'value': value})
-                except (ValueError, TypeError):
-                    continue
-            if len(rows) >= 2:
-                rows = _filter_outlier_rows(rows)
-                if len(rows) >= 2:
-                    return pd.DataFrame(rows)
-
-    # 模式2：从上下文中提取（带关键词的数值）
-    number_pattern = r'([\d,]+\.?\d*)\s*(?:元|单|%|)'
-    all_numbers = re.findall(number_pattern, answer)
-
-    if len(all_numbers) >= 3:
-        keywords = ['PR', 'APP', '微信', '商品', '平台']
-        for kw in keywords:
-            if kw in answer:
-                context_matches = re.findall(rf'({kw}[^0-9\n]*?)(?:[:：]?\s*)?({number_pattern})', answer, re.IGNORECASE)
-                if context_matches and len(context_matches) >= 2:
-                    for cm in context_matches:
-                        try:
-                            val = float(re.sub(r'[^\d.]', '', cm[1]))
-                            label = cm[0].strip()
-                            # 清理标签：去掉无意义的修饰词
-                            label = re.sub(r'^(及|对应|的|为|是|有|共)\s*', '', label)
-                            label = label[:30] if len(label) > 30 else label
-                            if label and val > 0:
-                                rows.append({'name': label, 'value': val})
-                        except (ValueError, TypeError):
-                            continue
-                    if len(rows) >= 2:
-                        rows = _filter_outlier_rows(rows)
-                        if len(rows) >= 2:
-                            return pd.DataFrame(rows)
-
-    return None if not rows else pd.DataFrame(rows)
-
-
-def _filter_outlier_rows(rows: list[dict]) -> list[dict]:
-    """过滤远小于其他数值的离群小值（例如从"3个"中误抓到的"1"），避免
-    图表上出现毫无意义的单像素柱和误导性的"1"标签。"""
-    if len(rows) < 2:
-        return rows
-    values = [r['value'] for r in rows]
-    max_val = max(values)
-    if max_val <= 0:
-        return rows
-    threshold = max_val * 0.05
-    return [r for r in rows if r['value'] >= threshold]
-
-
-def _is_garbled_key(key: str) -> bool:
-    """判断解析到的 key 是否是乱码（Java 对象引用、Python repr、driver 内部类型等），
-    避免这些内容被当成图表标签或表格列名展示给用户。"""
-    if not key:
-        return True
-    if re.search(r'[a-zA-Z_][\w.]*@[0-9a-f]{6,8}', key):
-        return True
-    if re.search(r'\b(?:com|org|net|io|java)\.[a-zA-Z][\w.]*', key):
-        return True
-    if re.search(r"<class\s+['\"]", key):
-        return True
-    if re.search(r"^[\[\{]|[\]\}]$", key):
-        return True
-    # 纯 driver 内部类型名/对象引用（区分于合法列名 orders/users/sales）
-    if re.search(r'\b(?:KBObjectField|JDBC|ResultSet)\b', key):
-        return True
-    if re.search(r'^\d+\s*rows?(?:\s|$)', key, re.IGNORECASE):
-        return True
-    return False
-
-
-def clean_sql_local(sql: str) -> str:
-    """兼容旧调用：自动剥除 HTML 标签。"""
-    return clean_sql(sql, strip_html=True)
-
-
-def strip_markdown_tables(text: str) -> str:
-    """剥离 markdown 表格（含表头分隔线 |---|），避免 LLM 生成的预填充表格
-    （如带"待查询结果填充"占位符的表格）与系统真实数据表格重复显示。"""
-    if not text:
-        return text
-    # 匹配以 | 开头的连续多行表格（含对齐分隔行 |---|、|:---:| 等）
-    text = re.sub(
-        r'(?:^|\n)[ \t]*\|[^\n]*\|(?:[ \t]*\n[ \t]*\|[-:\s|]+\|)?'
-        r'(?:[ \t]*\n[ \t]*\|[^\n]*\|)*',
-        '\n',
-        text,
-    )
-    # 清理可能残留的多余空行
-    text = re.sub(r'\n{3,}', '\n\n', text)
-    return text.strip()
-
-
-# 不可读的"乱码"内容特征：Java 对象引用、Python repr 调试输出、driver 内部类型名
-GARBLED_PATTERNS = [
-    # Java toString 输出：com.kingbase8.util.KBObjectField@7c0a2f2b
-    r'[a-zA-Z_][\w.]*@[0-9a-f]{6,8}',
-    # Java/Kotlin 类的全限定名（含包路径）
-    r'(?:^|\s)(?:com|org|net|io|java)\.[a-zA-Z][\w.]*(?:\s|$|[,;:|])',
-    # Python repr：<class 'list'>、<sqlalchemy...>
-    r"<class\s+['\"][\w.]+['\"]>",
-    r"<sqlalchemy\.[\w.]+(\.[\w]+)?\s+object",
-    # Python 列表/字典 repr：['orders']、{'key': 'value'}
-    r"\[\s*'[^']*'\s*\]",
-    r"\{\s*'[^']*'\s*:\s*'[^']*'\s*\}",
-    # 内部 driver 错误/类型提示
-    r"\d+\s*rows?\s*(?:affected|returned)?",
-    r"KBObjectField|JDBC|ResultSet",
-    # 行内"占位符"型描述
-    r"待查询结果填充|查询结果填充|待补充|待填充",
-]
-
-
-def strip_garbled_content(text: str) -> str:
-    """剥离 LLM 回答中误带的数据库对象引用、Python repr 调试输出等不可读内容。
-    这些通常是 LLM 直接复制 SQL 工具 observation（如 KingbaseES JDBC 返回的
-    Java 对象 toString、SQLAlchemy 内部 repr）导致的，需要在渲染前清除。"""
-    if not text:
-        return text
-
-    # 1. 按行扫描：包含乱码特征词的整行直接删除
-    cleaned_lines = []
-    for line in text.splitlines():
-        if any(re.search(pat, line) for pat in GARBLED_PATTERNS):
-            continue
-        cleaned_lines.append(line)
-    text = '\n'.join(cleaned_lines)
-
-    # 2. 清理行内的乱码片段（保留行，去掉乱码）
-    for pat in GARBLED_PATTERNS:
-        text = re.sub(pat, '', text)
-
-    # 3. 清理可能残留的多余空行
-    text = re.sub(r'\n{3,}', '\n\n', text)
-    return text.strip()
-
-
-def _convert_value(val):
-    """将 SQLAlchemy 返回的原始值转换为 DataFrame 友好的 Python 原生类型。
-    处理 datetime/Decimal/bytes/UUID 等特殊类型，避免后续处理时类型不一致。"""
-    if val is None:
-        return None
-    if isinstance(val, datetime.datetime):
-        return val.strftime('%Y-%m-%d %H:%M:%S')
-    if isinstance(val, datetime.date):
-        return val.strftime('%Y-%m-%d')
-    if isinstance(val, datetime.time):
-        return val.strftime('%H:%M:%S')
-    if isinstance(val, datetime.timedelta):
-        return val.total_seconds()
-    if isinstance(val, decimal.Decimal):
-        return float(val)
-    if isinstance(val, bytes):
-        try:
-            return val.decode('utf-8')
-        except UnicodeDecodeError:
-            return val.hex()
-    if isinstance(val, (set, frozenset)):
-        return list(val)
-    return val
 
 
 def run_sql_query(sql: str) -> pd.DataFrame | None:
@@ -1057,11 +693,11 @@ def render_agent_steps(steps: list[dict]) -> None:
 
 
 db_engine = init_engine()
-try:
-    retriever, rag_status = init_retriever()
-except Exception as e:
-    logger.error("RAG 初始化异常: %s", e)
-    retriever, rag_status = None, {"ok": False, "error": str(e), "count": 0}
+# RAG 检索器用懒加载代理替代 eager 调用：模块顶层 import 时不拉起
+# BGE(93MB) 与 Chromadb，只有当用户真的问出 knowledge/hybrid 类问题时
+# 才会触发首次初始化。首页/纯 data 问题路径零 RAG 代价。
+retriever = _LazyRetriever()
+rag_status = retriever.status  # 初值：未初始化
 runtime = get_session_runtime(db_engine, retriever)
 render_runtime_status(db_engine, rag_status)
 render_setup_guide(db_engine)
@@ -1559,3 +1195,4 @@ if prompt:
             "question": prompt,
             "answer": answer[:100],
         })
+
