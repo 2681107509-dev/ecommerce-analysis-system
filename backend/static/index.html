@@ -1025,18 +1025,23 @@ const nodeList = $("nodeList");
 const qList = $("qList");
 
 /* ---------- 左栏：查询台 ---------- */
-QUERIES.forEach((q, i) => {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "q-item";
-    b.dataset.intent = q.intent;
-    b.innerHTML =
-        '<span class="q-intent">' + q.intent + "</span>" +
-        '<span class="q-text" style="display:block;">' + q.text + "</span>" +
-        '<span class="q-src">' + q.src + " · " + q.path.length + " 节点</span>";
-    b.addEventListener("click", () => selectQuery(i, true));
-    qList.appendChild(b);
-});
+function renderQueryList() {
+    qList.innerHTML = "";
+    QUERIES.forEach((q, i) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "q-item";
+        b.dataset.intent = q.intent;
+        b.innerHTML =
+            '<span class="q-intent">' + q.intent + "</span>" +
+            '<span class="q-text" style="display:block;">' + q.text + "</span>" +
+            '<span class="q-src">' + q.src + " · " + q.path.length + " 节点</span>";
+        b.addEventListener("click", () => selectQuery(i, true));
+        qList.appendChild(b);
+    });
+    syncQueryList();
+}
+renderQueryList();
 
 function syncQueryList() {
     Array.from(qList.children).forEach((el, i) => {
@@ -1227,6 +1232,59 @@ document.addEventListener("visibilitychange", () => {
 /* ---------- 初始化：默认自动演示一遍 ---------- */
 syncQueryList();
 renderNodes();
+
+/* ===== 加载真实快照（双模式）=====
+   默认请求完整模式：4 条链路 + 节点元数据 + 运行汇总；
+   ?mode=lite 走精简模式：3 条核心链路 + 裁掉 SQL 词表（更省流量，弱网首屏更快）。
+   失败/超时回退到内联 QUERIES：用户首屏绝不能因 fetch 失败而空白。
+   这里用同步写法初始化渲染，异步拿到快照后增量重绘。*/
+const SNAPSHOT_URL = (() => {
+    const m = new URLSearchParams(location.search).get("mode");
+    return "/static/data/agent-trace-snapshot" + (m === "lite" ? ".lite" : "") + ".json";
+})();
+/* 给快照打 bust 戳：避免旧浏览器 / Service Worker 缓存上一份 full，
+   同时 mode 切换也能立即生效。生产 CDN 可以加 hash 后再部署。 */
+const SNAPSHOT_BUST = "?v=1";
+const SNAPSHOT_TIMEOUT_MS = 2500;
+
+async function applySnapshot() {
+    let snap = null;
+    try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), SNAPSHOT_TIMEOUT_MS);
+        const r = await fetch(SNAPSHOT_URL + SNAPSHOT_BUST, { signal: ctrl.signal, cache: "no-cache" });
+        clearTimeout(t);
+        if (r.ok) snap = await r.json();
+    } catch (e) { snap = null; }
+    if (!snap || !Array.isArray(snap.queries) || !snap.queries.length) {
+        setHint("演示数据快照加载失败，已回退到内联版本。");
+        return;
+    }
+    /* 用快照数据替换内联 QUERIES，并补全 NODE_META / SQL 高亮（仅完整模式带回） */
+    QUERIES.length = 0;
+    QUERIES.push(...snap.queries);
+    if (snap.nodeMeta && typeof snap.nodeMeta === "object") {
+        for (const k of Object.keys(snap.nodeMeta)) NODE_META[k] = snap.nodeMeta[k];
+    }
+    curQ = 0; cur = -1; autoDone = false;
+    renderQueryList();
+    renderNodes();
+    if (reduced) {
+        setCurrent(QUERIES[curQ].path.length - 1);
+        setHint("已按减少动效偏好直接呈现终态。可用单步逐节点回看。");
+    } else {
+        setCurrent(0);
+    }
+    /* 标题区右上角的"数据源 GLM 快照"模式徽标：显示模型 + 通过率 + 快照生成时间。
+       真实数据替换"GLM 快照"占位文字。*/
+    const label = document.getElementById("modeLabel");
+    if (label && snap.source && snap.runSummary) {
+        const r = snap.runSummary;
+        const stamp = (snap.source.runAtUtc || "").slice(0, 10);
+        label.textContent = (snap.source.model || "GLM") + " · " + (r.passed || 0) + "/" + (r.total || 0) + " 通过 · " + stamp;
+    }
+}
+
 if (reduced) {
     setCurrent(QUERIES[curQ].path.length - 1);
     setHint("已按减少动效偏好直接呈现终态。可用单步逐节点回看。");
@@ -1247,6 +1305,17 @@ if (reduced) {
         setTimeout(kick, 400);
     }
 }
+
+/* 快照加载完后若用户没手动干预且自动播放没启动，可以补一次；
+   重要的是 fetch 失败时首屏已经由内联数据兜住。 */
+applySnapshot().then(() => {
+    if (autoDone || hasInteracted || autoTimer) return;
+    if (reduced) return;
+    const studio = document.querySelector(".studio-section");
+    if (!studio) return;
+    const r = studio.getBoundingClientRect();
+    if (r.bottom > 0 && r.top < window.innerHeight) startAuto();
+});
 
 /* ===== 指标计数动画（进入视口才播放）===== */
 const counters = document.querySelectorAll("[data-count]");
