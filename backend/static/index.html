@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AI Commerce Intelligence Platform — 一次提问，看它如何变成一次安全的数据查询</title>
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Manrope:wght@700;800&family=Noto+Sans+SC:wght@400;500;700;800&display=swap" rel="stylesheet">
@@ -823,7 +824,10 @@ const DEMO_SOURCES = [
     { name: "schema_orders.md · 表结构", score: "0.58" },
 ];
 
-let cur = -1, autoTimer = null, elapsed = 0;
+/* hasInteracted 必须显式初始化：setCurrent() 在下方初始化时即被同步调用，
+   若此处缺失，会在首帧抛出 ReferenceError 并中断本脚本剩余部分
+   （指标计数动画、入场渐显、服务状态轮询全部不执行）。 */
+let cur = -1, autoTimer = null, elapsed = 0, hasInteracted = false;
 const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 const nodeList = document.getElementById("nodeList");

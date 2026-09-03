@@ -7,7 +7,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.staticfiles import StaticFiles
 
 from backend.config import get_settings
 from backend.database import check_db_connection, engine
@@ -214,6 +215,10 @@ app.include_router(rfm.router)
 
 _DEMO_DIR = os.path.dirname(os.path.abspath(__file__))
 _STATIC_DIR = os.path.join(_DEMO_DIR, "static")
+_FAVICON_PATH = os.path.join(_STATIC_DIR, "favicon.svg")
+
+# 挂载静态资源目录：图标与首页所需的数据快照（如 data/agent-trace-snapshot.json）由此提供。
+app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 
 
 @app.get("/", tags=["系统"])
@@ -222,9 +227,19 @@ async def root() -> FileResponse:
 
 
 @app.get("/favicon.ico", include_in_schema=False)
-async def favicon() -> Response:
-    """浏览器默认图标请求无需记录为 404。"""
-    return Response(status_code=204)
+async def favicon() -> FileResponse:
+    """返回真实站点图标。
+
+    早期实现在此返回 204：状态码不再是 404，但浏览器依旧拿不到任何图标，
+    属于「隐藏问题」而非修复。现在两个路径都返回真实 SVG 图标内容。
+    """
+    return FileResponse(_FAVICON_PATH, media_type="image/svg+xml")
+
+
+@app.get("/favicon.svg", include_in_schema=False)
+async def favicon_svg() -> FileResponse:
+    """现代浏览器使用的矢量图标，同时在 index.html 中显式声明。"""
+    return FileResponse(_FAVICON_PATH, media_type="image/svg+xml")
 
 
 @app.get("/health", tags=["系统"])

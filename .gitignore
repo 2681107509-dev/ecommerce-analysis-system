@@ -1,4 +1,6 @@
 .venv/
+# AI 助手依赖与后端依赖存在 langchain 版本冲突，本地需独立虚拟环境（对应 CI 的独立 job）
+.venv-ai/
 __pycache__/
 *.pyc
 *.pyo

@@ -51,9 +51,13 @@ class TestSystem:
         assert "text/html" in r.headers["content-type"]
 
     @pytest.mark.asyncio
-    async def test_favicon_does_not_return_404(self, client: AsyncClient):
-        r = await client.get("/favicon.ico")
-        assert r.status_code == 204
+    async def test_favicon_returns_real_icon(self, client: AsyncClient):
+        # 图标必须返回真实内容：204 只是把 404 藏起来，浏览器仍然拿不到图标。
+        for path in ("/favicon.ico", "/favicon.svg", "/static/favicon.svg"):
+            r = await client.get(path)
+            assert r.status_code == 200, f"{path} 返回 {r.status_code}，未返回真实图标"
+            assert "image/svg+xml" in r.headers["content-type"]
+            assert "<svg" in r.text, f"{path} 返回的不是 SVG 图标"
 
     @pytest.mark.asyncio
     async def test_health(self, client: AsyncClient):
