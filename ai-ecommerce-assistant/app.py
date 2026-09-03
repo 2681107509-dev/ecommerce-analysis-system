@@ -26,7 +26,9 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 # 业务知识来源抽取（无 streamlit 依赖，便于单元测试）
-from rag import metrics as rag_metrics
+# 注意：rag.* 子模块的顶层 import 会立刻拉起 BGE + Chroma（embedding + 持久化客户端），
+# 严重拖慢 Streamlit 冷启动。RAG 仅在知识类问题处理路径才需要，
+# 因此把 from rag import metrics 挪到使用处（条件块内）——首次启用事件落盘时才付代价。
 
 from agent_core import AgentRuntime
 from agent_core.db_schema import describe_table
@@ -52,6 +54,7 @@ FEEDBACK_LOG_PATH = os.environ.get(
 
 # 启用 RAG 事件 JSONL 落盘（默认关闭磁盘 IO，避免拖慢；可由环境变量开启）
 if os.environ.get("RAG_EVENTS_LOG", "0") == "1":
+    from rag import metrics as rag_metrics  # 仅在真正启用时付一次导入代价
     rag_metrics.enable_event_file_logging()
 
 
@@ -392,6 +395,52 @@ def init_retriever():
             "error": str(e),
             "count": 0,
         }
+
+
+class _LazyRetriever:
+    """RAG 检索器懒加载代理。
+
+    关键设计：模块顶层 import app.py 时不会拉起 BGE/Chromadb。
+    真正的初始化只发生在首次 knowledge 类问题触发 retrieve() 调用时。
+    - status：与 init_retriever 的 status_dict 同形，但 ok=False 时 count=0
+    - get_stats()：未初始化时返回空 dict（避免 NoneType 报错）
+    - dump_stats()：未初始化时 no-op
+    - retrieve()：未初始化时返回空列表（与旧逻辑 "if _retriever is None: return []" 对齐）
+    """
+    def __init__(self):
+        self._inner = None
+        self.status = {"ok": False, "error": "not initialized yet", "count": 0}
+        self._initialized = False
+
+    def _ensure(self):
+        if self._initialized:
+            return
+        self._initialized = True
+        try:
+            inner, status = init_retriever()
+            self._inner = inner
+            self.status = status
+        except Exception as e:
+            logger.error("RAG 懒加载失败: %s", e)
+            self.status = {"ok": False, "error": str(e), "count": 0}
+            self._inner = None
+
+    def retrieve(self, query: str, k: int = 3):
+        self._ensure()
+        if self._inner is None:
+            return []
+        return self._inner.retrieve(query, k=k)
+
+    def get_stats(self) -> dict:
+        self._ensure()
+        if self._inner is None:
+            return {}
+        return self._inner.get_stats()
+
+    def dump_stats(self) -> None:
+        self._ensure()
+        if self._inner is not None:
+            self._inner.dump_stats()
 
 
 def get_session_runtime(_engine, _retriever):
@@ -1057,11 +1106,11 @@ def render_agent_steps(steps: list[dict]) -> None:
 
 
 db_engine = init_engine()
-try:
-    retriever, rag_status = init_retriever()
-except Exception as e:
-    logger.error("RAG 初始化异常: %s", e)
-    retriever, rag_status = None, {"ok": False, "error": str(e), "count": 0}
+# RAG 检索器用懒加载代理替代 eager 调用：模块顶层 import 时不拉起
+# BGE(93MB) 与 Chromadb，只有当用户真的问出 knowledge/hybrid 类问题时
+# 才会触发首次初始化。首页/纯 data 问题路径零 RAG 代价。
+retriever = _LazyRetriever()
+rag_status = retriever.status  # 初值：未初始化
 runtime = get_session_runtime(db_engine, retriever)
 render_runtime_status(db_engine, rag_status)
 render_setup_guide(db_engine)
