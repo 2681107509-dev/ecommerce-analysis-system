@@ -57,7 +57,7 @@ if os.environ.get("RAG_EVENTS_LOG", "0") == "1":
 
 def record_feedback(question: str, answer: str, rating: str,
                     rag_sources: list[dict] | None = None) -> bool:
-    """把用户 👍/👎 反馈追加到 jsonl 文件，供离线分析检索质量。
+    """把用户赞成/反对反馈追加到 jsonl 文件，供离线分析检索质量。
 
     Args:
         question: 用户问题。
@@ -130,14 +130,14 @@ BUSINESS_CONTEXT = """## 数据时间范围
 7. 先给出数据结论，再附上 SQL 语句
 8. 用中文回答
 9. 仅回答电商数据相关问题
-10. 如果发现某指标明显异常（如某渠道退款率远超平均值），请在回答末尾添加【⚠️ 异常预警】段落，给出业务建议"""
+10. 如果发现某指标明显异常（如某渠道退款率远超平均值），请在回答末尾添加【异常预警】段落，给出业务建议"""
 
 SENSITIVE_PATTERNS = [
     r"密码", r"手机号", r"身份证", r"地址.*具体", r"订单明细.*用户名",
     r"个人.*信息", r"隐私", r"password", r"phone.*number",
 ]
 
-SENSITIVE_RESPONSE = "⚠️ 该数据已脱敏，仅支持聚合查询，无法提供用户个人隐私数据。"
+SENSITIVE_RESPONSE = "该数据已脱敏，仅支持聚合查询，无法提供用户个人隐私数据。"
 
 
 def is_sensitive_query(query: str) -> bool:
@@ -151,63 +151,168 @@ def get_cache_key(question: str) -> str:
     return hashlib.md5(question.encode()).hexdigest()
 
 
-st.set_page_config(page_title="AI Commerce Intelligence Platform", page_icon="🤖", layout="wide",
+st.set_page_config(page_title="AI Commerce Intelligence Platform", layout="wide",
                    initial_sidebar_state="expanded")
 
 st.markdown("""
 <style>
-    :root { --brand: #1565C0; --ink: #0F172A; --muted: #64748B; --surface: #FFFFFF; }
-    .stApp { background: #F6F8FC; color: var(--ink); }
+    @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+    :root {
+        --brand: #1565C0;
+        --teal: #14B8A6;
+        --purple: #8B5CF6;
+        --orange: #F97316;
+        --green: #22C55E;
+        --bg: #F6F8FC;
+        --surface: #FFFFFF;
+        --surface-2: #F8FAFC;
+        --sidebar: #EEF2F7;
+        --line: #E2E8F0;
+        --line-strong: #CBD5E1;
+        --ink: #0F172A;
+        --muted: #64748B;
+        --sans: 'Manrope', 'Noto Sans SC', -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+        --mono: 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
+    }
+
+    html, body, [class*="css"] { font-family: var(--sans); }
+    .stApp { background: var(--bg); color: var(--ink); }
     .block-container { max-width: 1380px; padding-top: 2rem; padding-bottom: 7rem; }
-    [data-testid="stHeader"] { background: rgba(246, 248, 252, .8); }
+    [data-testid="stHeader"] { background: var(--bg); border-bottom: 1px solid rgba(226,232,240,.7); }
     [data-testid="stSidebar"] {
-        min-width: 300px; max-width: 340px; background: #EEF2F7; color: var(--ink);
-        border-right: 1px solid #E2E8F0;
+        min-width: 300px; max-width: 340px; background: var(--sidebar); color: var(--ink);
+        border-right: 1px solid var(--line);
     }
+    [data-testid="stSidebar"] .stMarkdown,
+    [data-testid="stSidebar"] p,
+    [data-testid="stSidebar"] label { color: var(--ink); }
     [data-testid="stChatMessage"] {
-        background: var(--surface); border: 1px solid #E2E8F0; border-radius: 14px;
-        padding: .75rem 1rem; box-shadow: 0 4px 16px rgba(15,23,42,.04);
+        background: var(--surface); border: 1px solid var(--line); border-radius: 14px;
+        padding: .8rem 1rem; box-shadow: none;
     }
-    [data-testid="stChatInput"] { border-color: #94A3B8; border-radius: 14px; }
-    h1, h2, h3 { color: var(--ink); letter-spacing: -.02em; }
-    .stButton > button { border-radius: 10px; border-color: #CBD5E1; }
+    [data-testid="stChatMessage"] [data-testid="stMarkdownContainer"] { line-height: 1.68; }
+    [data-testid="stChatInput"] {
+        border: 1px solid var(--line-strong); border-radius: 14px; background: var(--surface);
+        box-shadow: none;
+    }
+    [data-testid="stChatInput"]:focus-within {
+        border-color: var(--brand); box-shadow: 0 0 0 2px rgba(21,101,192,.14);
+    }
+    h1, h2, h3 { color: var(--ink); letter-spacing: -.02em; font-family: var(--sans); }
+    h1 { font-size: clamp(2rem, 3vw, 2.6rem); font-weight: 800; }
+    h2, h3 { font-weight: 750; }
+    .stCaption, [data-testid="stCaptionContainer"] { color: var(--muted); }
+    .stButton > button, [data-testid="stFormSubmitButton"] > button, [data-testid="stDownloadButton"] > button {
+        border-radius: 10px; border: 1px solid var(--line-strong); background: var(--surface);
+        color: var(--ink); font-weight: 650; box-shadow: none; transition: background .15s, border-color .15s;
+    }
+    .stButton > button:hover, [data-testid="stFormSubmitButton"] > button:hover,
+    [data-testid="stDownloadButton"] > button:hover { background: var(--surface-2); border-color: #94A3B8; }
+    .stButton > button:focus-visible, [data-testid="stFormSubmitButton"] > button:focus-visible,
+    [data-testid="stDownloadButton"] > button:focus-visible, [data-testid="stChatInput"] textarea:focus-visible {
+        outline: 2px solid rgba(21,101,192,.34); outline-offset: 2px;
+    }
+    [data-testid="stExpander"] {
+        background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: none;
+    }
+    [data-testid="stAlert"] { border-radius: 10px; box-shadow: none; }
+    [data-testid="stMetric"] {
+        background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+        padding: 12px 14px; box-shadow: none;
+    }
+    [data-testid="stMetricValue"] { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+    [data-testid="stDataFrame"] { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+
+    .status-strip {
+        display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 14px 0 18px;
+    }
+    .status-card {
+        min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+        padding: 12px 14px;
+    }
+    .status-label {
+        display: flex; align-items: center; gap: 7px; color: var(--muted); font-family: var(--mono);
+        font-size: 10.5px; letter-spacing: 1px; text-transform: uppercase;
+    }
+    .status-dot { width: 7px; height: 7px; border-radius: 2px; flex: none; }
+    .status-ok .status-dot { background: var(--green); }
+    .status-warn .status-dot { background: var(--orange); }
+    .status-error .status-dot { background: #DC2626; }
+    .status-value {
+        margin-top: 6px; color: var(--ink); font-weight: 750; font-size: 14px;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .status-note { margin-top: 3px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+
+    .setup-panel {
+        background: var(--surface); border: 1px solid var(--line); border-radius: 14px;
+        padding: 18px 20px; margin: 12px 0 18px;
+    }
+    .setup-title { color: var(--ink); font-size: 18px; font-weight: 800; letter-spacing: -.02em; }
+    .setup-body { color: var(--muted); font-size: 14px; line-height: 1.7; margin-top: 7px; }
+    .setup-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
+    .setup-action {
+        min-width: 0; background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px;
+        padding: 11px 12px;
+    }
+    .setup-step { color: var(--brand); font-family: var(--mono); font-size: 11px; font-weight: 700; }
+    .setup-action strong { display: block; color: var(--ink); font-size: 13px; margin-top: 4px; }
+    .setup-action span:last-child { display: block; color: var(--muted); font-size: 12px; line-height: 1.45; margin-top: 3px; }
+
     .step-indicator {
-        display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
-        padding: 12px 16px; border-radius: 8px;
-        background: #EFF6FF; border: 1px solid #DBEAFE; margin-bottom: 12px;
+        display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+        padding: 11px 13px; border-radius: 10px;
+        background: var(--surface-2); border: 1px solid var(--line); margin-bottom: 12px;
     }
-    .step-item { font-size: 14px; }
-    .step-done { color: #16A34A; }
-    .step-active { color: #1565C0; font-weight: 700; }
+    .step-item { font-size: 13px; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+    .step-done { color: #15803D; }
+    .step-active { color: var(--brand); font-weight: 700; }
     .step-error { color: #DC2626; font-weight: 700; }
-    .highlight-num { color: #1565C0; font-weight: 700; font-size: 1.1em; }
+    .step-pending { color: #94A3B8; }
+    .highlight-num { color: var(--brand); font-weight: 750; font-variant-numeric: tabular-nums; }
     .warning-box {
-        background: rgba(234,179,8,0.1); border-left: 4px solid #EAB308;
-        padding: 10px 14px; border-radius: 6px; margin: 8px 0;
+        background: rgba(249,115,22,0.08); border: 1px solid rgba(249,115,22,0.22);
+        color: #9A3412; padding: 10px 13px; border-radius: 8px; margin: 8px 0;
     }
     .sql-block {
-        position: relative; background: #1a1a2e; border-radius: 8px;
-        padding: 12px; margin: 8px 0; font-family: monospace;
+        position: relative; background: #0F172A; border: 1px solid #1E293B; border-radius: 10px;
+        padding: 14px; margin: 10px 0 6px; font-family: var(--mono);
         font-size: 13px; overflow-x: auto;
     }
     .sql-copy-btn {
-        position: absolute; top: 6px; right: 6px;
-        background: rgba(21,101,192,0.35); border: 1px solid #3B82F6;
-        color: #E4E4E7; padding: 2px 10px; border-radius: 4px;
-        cursor: pointer; font-size: 11px;
+        position: absolute; top: 8px; right: 8px;
+        background: rgba(20,184,166,0.14); border: 1px solid rgba(20,184,166,0.38);
+        color: #CCFBF1; padding: 3px 9px; border-radius: 6px;
+        cursor: pointer; font-size: 11px; font-family: var(--mono);
     }
-    .sql-copy-btn:hover { background: rgba(21,101,192,0.65); }
-    .query-time { color: var(--muted); font-size: 12px; margin-top: 4px; }
+    .sql-copy-btn:hover { background: rgba(20,184,166,0.24); }
+    .query-time {
+        color: var(--muted); font-size: 12px; margin-top: 4px;
+        font-family: var(--mono); font-variant-numeric: tabular-nums;
+    }
     .history-item {
         padding: 6px 10px; border-radius: 6px; margin-bottom: 4px;
         background: rgba(21,101,192,0.07); cursor: pointer;
         transition: background 0.2s; font-size: 13px;
     }
-    .history-item:hover { background: rgba(21,101,192,0.16); }
+    .history-item:hover { background: rgba(21,101,192,0.13); }
+    ::selection { background: rgba(21,101,192,.16); }
+    * { scrollbar-width: thin; scrollbar-color: #CBD5E1 transparent; }
+    *::-webkit-scrollbar { width: 10px; height: 10px; }
+    *::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 999px; border: 3px solid transparent; background-clip: content-box; }
+    *::-webkit-scrollbar-track { background: transparent; }
+
+    @media (max-width: 760px) {
+        .block-container { padding-left: 1rem; padding-right: 1rem; padding-top: 1.2rem; }
+        .status-strip, .setup-actions { grid-template-columns: 1fr; }
+        [data-testid="stMarkdownContainer"] h1 { font-size: 1.65rem !important; }
+        [data-testid="stChatMessage"] { border-radius: 12px; }
+    }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🤖 AI 智能商业分析平台")
+st.title("AI 智能商业分析平台")
 st.caption("基于 LangGraph + RAG 的结构化 Text-to-SQL | 安全路由 → 只读查询 → 来源与轨迹可见")
 
 if "messages" not in st.session_state:
@@ -258,7 +363,7 @@ def init_engine() -> Engine | None:
         return engine
     except Exception as e:
         logger.warning("SQLAlchemy engine 初始化失败: %s", e, exc_info=True)
-        st.warning(f"⚠️ SQLAlchemy engine 初始化失败：{sanitize_error(e)}")
+        st.warning(f"SQLAlchemy engine 初始化失败：{sanitize_error(e)}")
         return None
 
 
@@ -346,6 +451,67 @@ def get_session_runtime(_engine, _retriever):
     return runtime
 
 
+def render_runtime_status(db_engine, rag_status: dict) -> None:
+    """在主区域展示模型、数据库、RAG 三类可观察状态，便于无 Key/降级时快速定位。"""
+    has_key = bool(st.session_state.get("model_api_key", "").strip())
+    db_ok = db_engine is not None
+    rag_count = int(rag_status.get("count") or 0)
+    rag_ready = bool(rag_status.get("ok")) and rag_count > 0
+    items = [
+        {
+            "label": "MODEL",
+            "state": "ok" if has_key else "warn",
+            "value": st.session_state.get("model_name", MODEL_NAME) if has_key else "待配置",
+            "note": "凭据仅保存在当前浏览器会话" if has_key else "在侧栏填写兼容 OpenAI API 的 Key",
+        },
+        {
+            "label": "DATABASE",
+            "state": "ok" if db_ok else "error",
+            "value": ("MySQL" if USE_MYSQL else "SQLite") if db_ok else "不可用",
+            "note": "只读连接已就绪" if db_ok else "检查数据库服务与环境变量",
+        },
+        {
+            "label": "RAG",
+            "state": "ok" if rag_ready else "warn",
+            "value": f"{rag_count} chunks" if rag_ready else ("知识库为空" if rag_status.get("ok") else "已降级"),
+            "note": "业务知识检索可用" if rag_ready else "纯 SQL 查询模式",
+        },
+    ]
+    cards = []
+    for item in items:
+        cards.append(
+            f'<div class="status-card status-{item["state"]}">'
+            f'<div class="status-label"><span class="status-dot"></span>{item["label"]}</div>'
+            f'<div class="status-value">{html.escape(str(item["value"]))}</div>'
+            f'<div class="status-note">{html.escape(item["note"])}</div>'
+            '</div>'
+        )
+    st.markdown(f'<div class="status-strip">{"".join(cards)}</div>', unsafe_allow_html=True)
+
+
+def render_setup_guide(db_engine) -> None:
+    """无 API Key 或数据库不可用时，在主区域给出可恢复的下一步。"""
+    has_key = bool(st.session_state.get("model_api_key", "").strip())
+    if has_key and db_engine is not None:
+        return
+    if db_engine is None:
+        title = "数据库连接不可用"
+        body = "页面仍可查看配置与历史状态；恢复数据库连接后即可继续发起只读查询。"
+    else:
+        title = "完成模型配置后开始查询"
+        body = "当前处于无 Key 降级状态。配置兼容 OpenAI API 的模型后，助手会展示路由、检索、SQL 与结果证据。"
+    st.markdown(f"""
+    <div class="setup-panel">
+        <div class="setup-title">{title}</div>
+        <div class="setup-body">{body}</div>
+        <div class="setup-actions">
+            <div class="setup-action"><span class="setup-step">01</span><strong>配置模型</strong><span>在侧栏填写 Base URL、模型名称与 API Key。</span></div>
+            <div class="setup-action"><span class="setup-step">02</span><strong>测试连接</strong><span>先验证模型可用性，再应用配置。</span></div>
+            <div class="setup-action"><span class="setup-step">03</span><strong>检查状态</strong><span>确认数据库为只读可用，RAG 失败时自动降级。</span></div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
 
 def detect_chart_type(df: pd.DataFrame, question: str = "") -> str:
     if df is None or len(df) == 0 or len(df.columns) < 2:
@@ -399,6 +565,23 @@ def detect_chart_type(df: pd.DataFrame, question: str = "") -> str:
     return "bar"
 
 
+_CHART_SEQUENCE = ["#1565C0", "#14B8A6", "#F97316", "#8B5CF6", "#64748B"]
+_CHART_FONT = {
+    "family": "Manrope, Noto Sans SC, Microsoft YaHei, sans-serif",
+    "size": 13,
+    "color": "#334155",
+}
+_CHART_HOVERLABEL = {
+    "bgcolor": "#0F172A",
+    "bordercolor": "#0F172A",
+    "font": {
+        "family": "Manrope, Noto Sans SC, Microsoft YaHei, sans-serif",
+        "size": 12,
+        "color": "#F8FAFC",
+    },
+}
+
+
 def create_chart(df: pd.DataFrame, title: str = "", question: str = "") -> go.Figure | None:
     chart_type = detect_chart_type(df, question)
     
@@ -412,20 +595,21 @@ def create_chart(df: pd.DataFrame, title: str = "", question: str = "") -> go.Fi
         title = f"{y_col} 分析"
 
     if chart_type == "line":
-        fig = px.line(df, x=x_col, y=y_col, template="plotly_dark", title=title,
-                      markers=True, color_discrete_sequence=["#818CF8"])
-        fig.update_traces(line_width=3, marker_size=10,
-                          fill='tozeroy', fillcolor='rgba(129,140,248,0.1)')
+        fig = px.line(df, x=x_col, y=y_col, template="plotly_white", title=title,
+                      markers=True, color_discrete_sequence=[_CHART_SEQUENCE[0]])
+        fig.update_traces(line_width=3, marker_size=8,
+                          fill='tozeroy', fillcolor='rgba(21,101,192,0.08)')
         fig.add_scatter(x=df[x_col], y=df[y_col], mode='markers',
-                        marker={"size": 12, "color": "#FACC15", "line": {"width": 2, "color": '#fff'}}, showlegend=False)
+                        marker={"size": 9, "color": _CHART_SEQUENCE[1], "line": {"width": 2, "color": '#FFFFFF'}},
+                        showlegend=False)
 
     elif chart_type == "pie":
-        fig = px.pie(df, names=x_col, values=y_col, template="plotly_dark", title=title,
-                     hole=0.4, color_discrete_sequence=px.colors.qualitative.Set2)
+        fig = px.pie(df, names=x_col, values=y_col, template="plotly_white", title=title,
+                     hole=0.42, color_discrete_sequence=_CHART_SEQUENCE)
         fig.update_traces(textposition='inside', textinfo='percent+label',
-                          textfont={"size": 13, "color": 'white'},
+                          textfont={"size": 12, "color": '#0F172A'},
                           hovertemplate='<b>%{label}</b><br>数值: %{value:,.2f}<br>占比: %{percent}<extra></extra>',
-                          pull=[0.02] * len(df))
+                          pull=[0.015] * len(df))
 
     elif chart_type in ["bar_h", "bar"]:
         df_plot = df.copy()
@@ -439,9 +623,9 @@ def create_chart(df: pd.DataFrame, title: str = "", question: str = "") -> go.Fi
             df_plot = df_plot.nlargest(8, columns=y_col).reset_index(drop=True)
 
         n_items = len(df_plot)
-        # 企业级配色：渐变红色系（高→低）
-        bar_colors = ['#EF4444', '#F87171', '#FCA5A5', '#FECACA', '#FEF2F2',
-                      '#FEE2E2', '#FEF5F7', '#FFF1F2']
+        # 受控蓝青色板：高值用主蓝，低值逐步降为浅蓝，避免高饱和红色误导风险语义。
+        bar_colors = ['#1565C0', '#1E88E5', '#42A5F5', '#64B5F6',
+                      '#90CAF9', '#BBDEFB', '#D6E8FB', '#EAF3FC']
 
         def format_y_label(val):
             val_str = str(val).strip()
@@ -481,7 +665,7 @@ def create_chart(df: pd.DataFrame, title: str = "", question: str = "") -> go.Fi
                     },
                     text=y_text,
                     textposition='outside',
-                    textfont={"size": 14, "color": '#334155', "family": 'monospace'},
+                    textfont={"size": 13, "color": '#334155', "family": 'JetBrains Mono, monospace'},
                     hovertemplate=f'<b>{x_label}</b><br>%{{x:,.0f}}<extra></extra>',
                 ))
 
@@ -513,7 +697,7 @@ def create_chart(df: pd.DataFrame, title: str = "", question: str = "") -> go.Fi
                     },
                     text=y_text,
                     textposition='outside',
-                    textfont={"size": 14, "color": '#E4E4E7', "family": 'monospace'},
+                    textfont={"size": 13, "color": '#334155', "family": 'JetBrains Mono, monospace'},
                     hovertemplate=f'<b>{x_label}</b><br>%{{x:,.0f}}<extra></extra>',
                 ))
 
@@ -524,31 +708,36 @@ def create_chart(df: pd.DataFrame, title: str = "", question: str = "") -> go.Fi
 
     fig.update_layout(
         title={"text": title, "x": 0.02, "xanchor": 'left', "y": 0.97, "yanchor": 'top',
-                   "font": {"size": 18, "color": '#1565C0'}},
+                   "font": {"size": 17, "color": '#0F172A', "family": _CHART_FONT["family"]}},
         margin={"l": 80 if chart_type in ["bar_h", "bar"] else 30,
                     "r": 100 if chart_type in ["bar_h", "bar"] else 30,
                     "t": 70, "b": 50},
         paper_bgcolor='rgba(0,0,0,0)',
         plot_bgcolor='#FFFFFF',
-        font={"color": '#334155', "size": 13},
-        title_font={"size": 16, "color": '#1565C0'},
+        font=_CHART_FONT,
+        hoverlabel=_CHART_HOVERLABEL,
+        colorway=_CHART_SEQUENCE,
         showlegend=False,
         xaxis={
             "showgrid": False if chart_type in ["bar_h", "bar"] else True,
             "gridcolor": '#E2E8F0',
+            "linecolor": '#CBD5E1',
+            "zerolinecolor": '#CBD5E1',
             "showticklabels": False if chart_type in ["bar_h", "bar"] else True,
             "tickangle": -20 if chart_type == "line" else 0,
-            "tickfont": {"size": 11},
+            "tickfont": {"size": 11, "color": '#64748B'},
             "zeroline": False,
             "range": [0, None] if chart_type in ["bar_h", "bar"] else None,
         },
         yaxis={
-            "showgrid": True if chart_type in ["bar_h", "bar"] else True,
-            "gridcolor": 'rgba(255,255,255,0.05)',
-            "tickfont": {"size": 11},
+            "showgrid": True,
+            "gridcolor": '#E2E8F0',
+            "linecolor": '#CBD5E1',
+            "zerolinecolor": '#CBD5E1',
+            "tickfont": {"size": 11, "color": '#64748B'},
         },
         hovermode='closest',
-        bargap=0.5,
+        bargap=0.42,
     )
 
     return fig
@@ -761,7 +950,7 @@ def run_sql_query(sql: str) -> pd.DataFrame | None:
         return pd.DataFrame(converted, columns=cols)
     except Exception as exc:
         logger.warning("只读 SQL 执行失败: %s", exc, exc_info=True)
-        st.warning(f"⚠️ 查询执行失败：{sanitize_error(exc)}")
+        st.warning(f"查询执行失败：{sanitize_error(exc)}")
         return None
 
 
@@ -800,14 +989,14 @@ def render_live_steps(steps: list[dict]) -> str:
 def render_sql_block(sql: str, query_time: float | None = None):
     escaped_sql = sql.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     copy_id = f"sql_{hashlib.md5(sql.encode()).hexdigest()[:8]}"
-    time_str = f'<div class="query-time">⏱️ 查询耗时：{query_time:.2f} 秒</div>' if query_time else ''
+    time_str = f'<div class="query-time">查询耗时：{query_time:.2f} 秒</div>' if query_time else ''
 
     st.markdown(f"""
     <div class="sql-block">
         <button class="sql-copy-btn" onclick="
             navigator.clipboard.writeText(document.getElementById('{copy_id}').textContent);
-            this.textContent='✅ 已复制'; setTimeout(()=>this.textContent='📋 复制 SQL', 1500);
-        ">📋 复制 SQL</button>
+            this.textContent='已复制'; setTimeout(()=>this.textContent='复制 SQL', 1500);
+        ">复制 SQL</button>
         <pre id="{copy_id}" style="margin:0;white-space:pre-wrap;word-break:break-all;color:#A5B4FC;">{escaped_sql}</pre>
     </div>
     {time_str}
@@ -846,7 +1035,7 @@ def render_answer_with_highlights(answer: str):
 
     # 4. 对非代码部分应用高亮
     answer = re.sub(r'(\d+\.?\d*%?)', r'<span class="highlight-num">\1</span>', answer)
-    answer = re.sub(r'【⚠️ 异常预警】(.*?)(?=\n|$)', r'<div class="warning-box">⚠️ 异常预警\1</div>', answer)
+    answer = re.sub(r'【[^】]{0,4}异常预警】(.*?)(?=\n|$)', r'<div class="warning-box">异常预警\1</div>', answer)
 
     # 5. 还原代码块
     for key, original in placeholders.items():
@@ -858,11 +1047,11 @@ def render_answer_with_highlights(answer: str):
 def render_agent_steps(steps: list[dict]) -> None:
     if not steps:
         return
-    with st.expander(f"🧭 执行轨迹 ({len(steps)} 步)", expanded=False):
+    with st.expander(f"执行轨迹 ({len(steps)} 步)", expanded=False):
         for step in steps:
-            icon = "✅" if step.get("status") == "success" else "⚠️"
+            status = "DONE" if step.get("status") == "success" else "WARN"
             st.caption(
-                f"{icon} {step.get('name', 'step')} · {step.get('duration_ms', 0)}ms — "
+                f"{status} · {step.get('name', 'step')} · {step.get('duration_ms', 0)}ms — "
                 f"{step.get('summary', '')}"
             )
 
@@ -874,9 +1063,11 @@ except Exception as e:
     logger.error("RAG 初始化异常: %s", e)
     retriever, rag_status = None, {"ok": False, "error": str(e), "count": 0}
 runtime = get_session_runtime(db_engine, retriever)
+render_runtime_status(db_engine, rag_status)
+render_setup_guide(db_engine)
 
 with st.sidebar:
-    with st.expander("⚙️ 模型连接", expanded=not bool(st.session_state.model_api_key)):
+    with st.expander("模型连接", expanded=not bool(st.session_state.model_api_key)):
         with st.form("model_connection_form"):
             model_base_url = st.text_input(
                 "API Base URL",
@@ -926,33 +1117,37 @@ with st.sidebar:
             st.info("配置兼容 OpenAI API 的模型后即可开始查询")
 
     st.divider()
-    with st.expander("📚 RAG 知识库", expanded=False):
-        if rag_status.get("ok"):
-            st.success("✅ RAG 已启用")
-            st.metric("向量库", f"{rag_status['count']} chunks", label_visibility="visible")
+    with st.expander("RAG 知识库", expanded=False):
+        rag_count = int(rag_status.get("count") or 0)
+        if rag_status.get("ok") and rag_count > 0:
+            st.success("RAG 已启用")
+            st.metric("向量库", f"{rag_count} chunks", label_visibility="visible")
             if retriever:
                 stats = retriever.get_stats()
                 k1, k2 = st.columns(2)
                 k1.metric("命中率", f"{stats['hit_rate_pct']:.0f}%")
                 k2.metric("平均延迟", f"{stats['avg_latency_ms']:.0f}ms")
                 st.caption(f"缓存: {stats['cache_size']} 条")
+        elif rag_status.get("ok"):
+            st.warning("RAG 知识库为空")
+            st.caption("将降级为纯 SQL 查询模式；请先构建或检查向量库。")
         else:
-            st.error(f"❌ RAG 未启用: {rag_status.get('error', '未知错误')[:80]}")
+            st.error(f"RAG 未启用：{rag_status.get('error', '未知错误')[:80]}")
             st.caption("将降级为纯 SQL 查询模式")
 
-    st.header("📜 查询历史")
+    st.header("查询历史")
     if st.session_state.query_history:
         for i, item in enumerate(reversed(st.session_state.query_history[-5:])):
             display_q = item["question"][:25] + "..." if len(item["question"]) > 25 else item["question"]
-            if st.button(f"🔄 {display_q}", key=f"hist_{i}", use_container_width=True):
+            if st.button(display_q, key=f"hist_{i}", use_container_width=True):
                 st.session_state.pending_question = item["question"]
     else:
         st.caption("暂无查询历史")
 
     st.divider()
-    st.header("💡 示例问题")
+    st.header("示例问题")
 
-    st.markdown("**📊 销售分析**")
+    st.markdown("**销售分析**")
     sales_examples = [
         "销售额最高的 3 个商品编号和金额",
         "APP 和微信公众号，谁的订单量更多？",
@@ -961,7 +1156,7 @@ with st.sidebar:
         if st.button(ex, key=ex, use_container_width=True):
             st.session_state.pending_question = ex
 
-    st.markdown("**⏰ 时间分析**")
+    st.markdown("**时间分析**")
     time_examples = [
         "最近 7 天每天的销售额是多少？",
         "哪个时间段的订单量最多？",
@@ -970,7 +1165,7 @@ with st.sidebar:
         if st.button(ex, key=ex, use_container_width=True):
             st.session_state.pending_question = ex
 
-    st.markdown("**👥 用户分析**")
+    st.markdown("**用户分析**")
     user_examples = [
         "用户平均消费频次是多少？",
         "各平台的退款率分别是多少？",
@@ -980,7 +1175,7 @@ with st.sidebar:
             st.session_state.pending_question = ex
 
     st.divider()
-    if st.button("🗑️ 清空对话", use_container_width=True):
+    if st.button("清空对话", use_container_width=True):
         st.session_state.messages = [
             {"role": "assistant", "content": "对话已清空，继续提问吧！",
              "chart_data": None, "chart_title": "", "csv_data": None, "sql": None, "query_time": None,
@@ -990,7 +1185,7 @@ with st.sidebar:
         st.rerun()
 
     st.divider()
-    st.header("🎯 智能推荐")
+    st.header("智能推荐")
     
     RECOMMENDATIONS = {
         '退款': ['哪个平台退款金额最多？', '退款率最高的时间段是？', '哪些商品退款最多？'],
@@ -1014,7 +1209,7 @@ with st.sidebar:
     
     if recommended:
         for rec in list(recommended)[:3]:
-            if st.button(f"💡 {rec}", key=f"rec_{rec[:20]}", use_container_width=True):
+            if st.button(rec, key=f"rec_{rec[:20]}", use_container_width=True):
                 st.session_state.pending_question = rec
     else:
         st.caption("查询后显示相关推荐")
@@ -1022,23 +1217,23 @@ with st.sidebar:
     st.divider()
     db_type = "MySQL" if USE_MYSQL else "SQLite"
     db_label = "MySQL (ai_commerce_intelligence_platform)" if USE_MYSQL else "SQLite (本地)"
-    st.caption(f"🗄️ 数据库：{db_label}")
-    st.caption(f"🧠 模型：{st.session_state.model_name}")
+    st.caption(f"数据库：{db_label}")
+    st.caption(f"模型：{st.session_state.model_name}")
 
 for msg_idx, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"]):
         if msg["role"] == "assistant" and msg.get("question"):
             col1, col2, col3 = st.columns([1, 1, 3])
             with col1:
-                thumbs_up = st.button("👍", key=f"up_{msg_idx}")
+                thumbs_up = st.button("有帮助", key=f"up_{msg_idx}")
             with col2:
-                thumbs_down = st.button("👎", key=f"down_{msg_idx}")
+                thumbs_down = st.button("需改进", key=f"down_{msg_idx}")
             feedback_key = f"fb_{msg_idx}"
             if "feedbacks" not in st.session_state:
                 st.session_state.feedbacks = {}
             # 落盘：仅在本次按钮被点击时记录（避免重复触发）
             if thumbs_up:
-                st.session_state.feedbacks[feedback_key] = "👍 有帮助"
+                st.session_state.feedbacks[feedback_key] = "有帮助"
                 record_feedback(
                     question=msg["question"],
                     answer=msg.get("content", ""),
@@ -1047,7 +1242,7 @@ for msg_idx, msg in enumerate(st.session_state.messages):
                 )
                 st.success("感谢反馈！")
             elif thumbs_down:
-                st.session_state.feedbacks[feedback_key] = "👎 需改进"
+                st.session_state.feedbacks[feedback_key] = "需改进"
                 record_feedback(
                     question=msg["question"],
                     answer=msg.get("content", ""),
@@ -1057,8 +1252,8 @@ for msg_idx, msg in enumerate(st.session_state.messages):
                 st.info("我们会持续优化，谢谢反馈！")
 
             # 按钮点击会触发整页重跑；根据已保存的反馈状态持续显示重新生成入口。
-            if st.session_state.feedbacks.get(feedback_key) == "👎 需改进":
-                if st.button("🔄 重新生成", key=f"regen_{msg_idx}", use_container_width=True):
+            if st.session_state.feedbacks.get(feedback_key) == "需改进":
+                if st.button("重新生成", key=f"regen_{msg_idx}", use_container_width=True):
                     st.session_state.pending_question = msg["question"]
                     # 替换这一轮问答，避免重新生成后在对话记录中出现重复内容。
                     if msg_idx > 0 and st.session_state.messages[msg_idx - 1].get("role") == "user":
@@ -1072,7 +1267,7 @@ for msg_idx, msg in enumerate(st.session_state.messages):
 
         # 显示本次回答引用的业务知识（参考来源）
         if msg.get("rag_sources"):
-            with st.expander(f"📚 参考知识 ({len(msg['rag_sources'])} 条)", expanded=False):
+            with st.expander(f"参考知识 ({len(msg['rag_sources'])} 条)", expanded=False):
                 for src in msg["rag_sources"]:
                     st.markdown(
                         f"**[{src['rank']}] {src['filename']}** > {src['section']} "
@@ -1086,7 +1281,7 @@ for msg_idx, msg in enumerate(st.session_state.messages):
                 csv_df = pd.DataFrame(msg["csv_data"])
                 st.dataframe(csv_df, use_container_width=True, hide_index=True)
                 st.download_button(
-                    "📥 导出 CSV",
+                    "导出 CSV",
                     csv_df.to_csv(index=False).encode("utf-8-sig"),
                     file_name="query_result.csv",
                     mime="text/csv",
@@ -1105,7 +1300,7 @@ for msg_idx, msg in enumerate(st.session_state.messages):
                             'modeBarButtonsToAdd': ['downloadPNG', 'zoomIn', 'zoomOut', 'fullscreen'],
                         })
             except Exception as e:
-                st.caption(f"⚠️ 图表加载失败: {str(e)[:50]}")
+                st.caption(f"图表加载失败：{str(e)[:50]}")
         if msg.get("sql"):
             render_sql_block(msg["sql"], msg.get("query_time"))
 
@@ -1117,7 +1312,22 @@ if hasattr(st.session_state, "pending_question"):
 
 if prompt:
     if not runtime:
-        st.error("请先在侧栏配置模型 API Key，并检查数据库连接。")
+        recovery = (
+            "数据库连接不可用。请先恢复数据库服务或环境变量，再重新提交问题。"
+            if db_engine is None
+            else "模型 API Key 尚未配置。请在侧栏完成模型连接并测试通过后，再重新提交问题。"
+        )
+        st.session_state.messages.append({"role": "user", "content": prompt,
+                                          "chart_data": None, "chart_title": "", "csv_data": None,
+                                          "sql": None, "query_time": None})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+        with st.chat_message("assistant"):
+            st.warning(recovery)
+            st.caption("恢复路径：检查 Base URL、模型名称、API Key 与数据库只读连接；RAG 失败时会自动降级为纯 SQL 查询模式。")
+        st.session_state.messages.append({"role": "assistant", "content": recovery,
+                                          "chart_data": None, "chart_title": "", "csv_data": None,
+                                          "sql": None, "query_time": None, "rag_sources": []})
         st.stop()
 
     if is_sensitive_query(prompt):
@@ -1142,7 +1352,7 @@ if prompt:
         with st.chat_message("user"):
             st.markdown(prompt)
         with st.chat_message("assistant"):
-            st.info("⚡ 从缓存读取")
+            st.info("从缓存读取")
             render_answer_with_highlights(cached["answer"])
             if cached.get("csv_data"):
                 try:
@@ -1161,12 +1371,12 @@ if prompt:
                                 'modeBarButtonsToAdd': ['downloadPNG', 'zoomIn', 'zoomOut', 'fullscreen'],
                             })
                 except Exception as e:
-                    st.caption(f"⚠️ 缓存图表加载失败: {str(e)[:50]}")
+                    st.caption(f"缓存图表加载失败：{str(e)[:50]}")
             if cached.get("csv_data"):
                 try:
                     csv_df = pd.DataFrame(cached["csv_data"])
                     st.download_button(
-                        "📥 导出 CSV",
+                        "导出 CSV",
                         csv_df.to_csv(index=False).encode("utf-8-sig"),
                         file_name="query_result.csv",
                         mime="text/csv",
@@ -1249,10 +1459,10 @@ if prompt:
         except Exception as exc:
             step_placeholder.empty()
             answer_placeholder.empty()
-            st.error(f"⚠️ 执行出错：{sanitize_error(exc)}")
+            st.error(f"执行出错：{sanitize_error(exc)}")
             st.session_state.messages.append({
                 "role": "assistant",
-                "content": "执行失败，请检查模型或数据库连接后重试。",
+                "content": "执行失败。请检查模型 Base URL、API Key、模型名称与数据库只读连接后重试；你的问题已保留在对话中。",
                 "chart_data": None, "chart_title": "", "csv_data": None,
                 "sql": None, "query_time": None, "rag_sources": [],
             })
@@ -1275,7 +1485,7 @@ if prompt:
         if result_df is None or (isinstance(result_df, pd.DataFrame) and len(result_df) == 0):
             result_df = parse_data_from_answer(answer)
             if result_df is not None and len(result_df) > 0:
-                st.info(f"📊 从回答文本解析数据成功，行数: {len(result_df)}")
+                st.info(f"从回答文本解析数据成功，行数：{len(result_df)}")
         
         if result_df is not None and len(result_df) > 0:
             st.dataframe(result_df, use_container_width=True, hide_index=True)
@@ -1307,7 +1517,7 @@ if prompt:
                     })
             
             st.download_button(
-                "📥 导出 CSV",
+                "导出 CSV",
                 result_df.to_csv(index=False).encode("utf-8-sig"),
                 file_name="query_result.csv",
                 mime="text/csv",
@@ -1315,7 +1525,7 @@ if prompt:
             )
         
         elif extracted_sql:
-            st.warning("⚠️ SQL 执行无结果")
+            st.warning("SQL 执行无结果")
 
         if extracted_sql:
             render_sql_block(extracted_sql, query_time)
