@@ -19,7 +19,7 @@
 | **RFM 用户画像** | SQLAlchemy + 量化分群 | R/F/M 五分位评分 → 8 类用户分群 + 流失预警 |
 | **数据分析 Notebook** | Jupyter + Pandas | 数据清洗、销售/时间/用户多维分析 |
 | **RAG 业务知识库** | Chroma + BGE-small-zh-v1.5 | 6 份业务文档（术语/数据字典/KPI/规则/API/黄金查询）向量检索 |
-| **测试 & 评估** | pytest + 离线/真实模型评估器 | 229 项自动化测试（实收全绿）+ 100 条路由回归 + 15 条词法检索回归 + 15 条 GLM 真实评测 |
+| **测试 & 评估** | pytest + 离线/真实模型评估器 | 231 项自动化测试（实收全绿）+ 125 条路由回归（100 curated + 25 鲁棒性）+ 15 条词法检索回归 + 15 条 GLM 真实评测 |
 
 ## 在线演示
 
@@ -219,7 +219,7 @@ Agent 层经历过一次重构，两个版本都保留在 Git 历史中：
 | 决策方 | 模型自主选择工具 | 确定性规则路由 |
 | 检索触发 | 模型调用 `query_business_knowledge` | 工作流按意图（`knowledge` / `hybrid`）调度 |
 | 来源还原 | 从 LangChain `intermediate_steps` 反解 | `AgentSource` 直接写入图状态，无需反解 |
-| 回归基线 | 难以建立（同一问题多次执行路径不稳定） | 100 条路由回归集，可防退化 |
+| 回归基线 | 难以建立（同一问题多次执行路径不稳定） | 125 条路由回归集（100 curated + 25 鲁棒性），可防退化 |
 | 代码位置 | `rag/tools.py`、`rag/prompts.py`、`rag/extractor.py` | `agent_core/runtime.py`、`agent_core/routing.py` |
 
 **为什么收敛**：v1 让模型自主决定何时检索，灵活性更高，但带来三个问题——
@@ -235,6 +235,19 @@ Agent 层经历过一次重构，两个版本都保留在 Git 历史中：
 
 **代价**：放弃模型自主工具规划能力。规则覆盖不到的长尾表述会误判意图；
 且 100/100 只用于防回归——数据集与规则同仓维护，**不代表未见问题上的泛化准确率**。
+
+**A/B 量化**：为验证这一取舍而非仅口头声明，`agent_core/eval/ab_routing_eval.py`
+将规则路由（A 侧）与 LLM 路由（B 侧，`agent_core/llm_router.py`）放在同一评测集上对照：
+
+| 路由器 | curated（100 条，贴合规则标记词） | robustness（25 条，口语改写/同义替换/隐私与注入变体） | 单条延迟 | 成本 |
+|--------|----------------------------------|------------------------------------------------------|----------|------|
+| A：确定性规则（生产在用） | **100%**（macro-F1 100%） | **24%**（6/25） | ~0.007ms | ¥0 |
+| B：LLM 路由（对照实现） | 需配置 `LLM_API_KEY` 运行补齐（未配置时明确跳过，**不伪造数字**） | 同左 | 网络往返级 | token 计费 |
+
+结论：规则路由在**已观测流量分布下是最优解**（确定性、零成本、可解释），
+但鲁棒性集暴露了真实的泛化缺口（"咋算"vs"怎么算"、"电话"vs"手机号"等变体会漏拦/误路由）——
+这正是保留 LLM 路由对照实现与混合路由（规则优先 + LLM 兜底）演进路径的原因。
+详见 `agent_core/eval/ab_routing_report.md`。
 
 **查看 v1 实现**（归档 tag）：
 
@@ -364,7 +377,7 @@ rag_tool_call_total 0
 
 | Workflow | 触发 | 职责 |
 |----------|------|------|
-| `.github/workflows/ci.yml` | PR / push main | AI 助手 85 项测试（Python 3.12 + 3.13）+ 后端 144 项测试（MySQL 8）+ Ruff + 编译 + 离线 Agent 评测；日志管道启用 `pipefail`，测试失败不会被 `tee` 掩盖 |
+| `.github/workflows/ci.yml` | PR / push main | AI 助手 85 项测试（Python 3.12 + 3.13）+ 后端 146 项测试（MySQL 8）+ Ruff + 编译 + 离线 Agent 评测；日志管道启用 `pipefail`，测试失败不会被 `tee` 掩盖 |
 | `.github/workflows/docker-smoke.yml` | PR / push main | 空卷构建全栈、断言 102,287 行、验证 7 个入口与 WebSocket 握手 |
 | `.github/workflows/release.yml` | push main / tag `v*.*.*` / 手动 | 构建 backend / streamlit / ai-assistant 三个 Docker 镜像，**多架构**（linux/amd64 + linux/arm64），推送到 `ghcr.io/super-zxq/ai-commerce-intelligence-platform-{backend,streamlit,ai-assistant}` |
 
@@ -463,10 +476,10 @@ docker compose pull && docker compose up -d
 
 ## 测试与评估
 
-### 自动化测试（229 项，实收全绿）
+### 自动化测试（231 项，实收全绿）
 
 ```bash
-# 后端（144 项，完整运行需要 MySQL）
+# 后端（146 项，完整运行需要 MySQL）
 python -m pytest backend/tests/ -v
 
 # AI/RAG（85 项）
@@ -475,9 +488,10 @@ python -m pytest ai-ecommerce-assistant/tests/ -v
 
 **测试覆盖：**
 
-后端（144 项）：
+后端（146 项）：
 - `test_agent_runtime_core.py` — 分支工具顺序、SQL AST、一次重试、用户会话隔离、Redis 降级、Token `null` 语义和 API 兼容
 - `test_agent_workflow.py` / `test_agent_evaluation.py` — 意图路由和离线发布门槛；安全短路与工具顺序由 Runtime 测试覆盖
+- `test_routing_ab.py` — 路由 A/B 基线回归：锁定 curated 集下限（≥97%）与鲁棒性集的泛化缺口（<95%），为 LLM 路由对照研究提供回归护栏
 - `test_agent_streaming.py` — 流式步骤与 Token 增量下发，返回值与非流式调用一致
 - `test_live_model_evaluation.py` — 真实评测集约束、结果集比较与共享 Schema 描述
 - `test_api.py` / `test_core_safety.py` / `test_security_hardening.py` / `test_mysql_execution_timeout.py` — API 契约、SQL 只读防护、安全加固、数据库侧执行时限
@@ -495,9 +509,9 @@ AI/RAG 测试不依赖真实 BGE 模型，用 `tests/conftest.py` 里的 `FakeEm
 
 | 套件 | pytest 收集 | 结果 |
 |------|------------|------|
-| `backend/tests` | 144 | **144 passed**（47s） |
+| `backend/tests` | 146 | **146 passed**（47s） |
 | `ai-ecommerce-assistant/tests` | 85 | **85 passed**（9s） |
-| **合计** | **229** | **229 passed / 0 failed** |
+| **合计** | **231** | **231 passed / 0 failed** |
 
 数字为参数化展开后的 pytest 实收用例数，非静态函数计数。
 后端套件需本地 MySQL 可连接（CI 中由 `init_ci_schema.py` 建表后运行）；AI/RAG 套件不依赖网络与真实模型。
@@ -519,6 +533,7 @@ python -m agent_core.evaluation
 - 路由集 100 条：25 条基础 SQL、20 条时间/聚合/同比/排序、15 条知识、15 条混合、15 条多轮/歧义、10 条安全问题。
 - 词法检索回归集 15 条：`agent_core` 的零外部服务检索器使用字符 bigram，报告 Recall@3 100%、MRR 0.7444；该数字**不是 BGE/Chroma 向量检索效果**。
 - 路由规则回归集为 100/100；多数类恒猜 `data` 的基线是 52/100，当前规则提升 48 个百分点。数据集与规则同仓维护，因此只用于防回归，不代表未见问题上的泛化准确率。
+- **路由 A/B 对照（v2 规则 vs LLM）**：新增 25 条鲁棒性集（口语改写/同义替换/隐私与注入变体），规则侧实测 6/25——量化了规则路由的真实泛化缺口；`agent_core/llm_router.py` 为 B 侧对照实现，配置 `LLM_API_KEY` 后运行 `python agent_core/eval/ab_routing_eval.py` 补齐 LLM 数字（未配置时明确跳过，不伪造）。报告见 `agent_core/eval/ab_routing_report.md`。
 
 ### 兼容 RAG 评估（20 条 gold_qa）
 
@@ -565,7 +580,8 @@ python eval/run_eval.py --report eval/my_report.md
 ai-commerce-intelligence-platform/
 ├── agent_core/                   # FastAPI / Streamlit 共享 Agent Runtime
 │   ├── runtime.py                # LangGraph 分节点工作流
-│   ├── routing.py                # 确定性意图路由
+│   ├── routing.py                # 确定性意图路由（A/B 的 A 侧）
+│   ├── llm_router.py             # LLM 意图路由对照（A/B 的 B 侧）
 │   ├── model_adapter.py          # 结构化模型适配
 │   ├── live_evaluation.py        # 显式联网的真实模型评测器
 │   ├── session.py                # Redis / 内存会话
@@ -593,7 +609,7 @@ ai-commerce-intelligence-platform/
 │   ├── scripts/                  # CI / 工具脚本
 │   │   ├── init_ci_schema.py     # CI 建表 + 5 条 fake orders seed
 │   │   └── sync_orders.py        # CSV 哈希校验 + 原子换表
-│   ├── tests/                    # 144 项 API 单元测试
+│   ├── tests/                    # 146 项 API 单元测试
 │   ├── requirements.txt          # 后端生产依赖
 │   └── requirements-dev.txt      # 后端测试与静态检查依赖
 ├── streamlit_app.py              # BI 数据看板（Streamlit 多页面）
@@ -647,7 +663,7 @@ ai-commerce-intelligence-platform/
 | 缓存 | Redis 7 |
 | 反代 | Nginx |
 | 容器 | Docker + Docker Compose |
-| 测试 | pytest（144 项后端 + 85 项 AI/RAG，实收全绿）+ 100 条路由回归 + 15 条词法检索回归 + 15 条 GLM 真实评测 |
+| 测试 | pytest（146 项后端 + 85 项 AI/RAG，实收全绿）+ 100 条路由回归 + 15 条词法检索回归 + 15 条 GLM 真实评测 |
 
 ## License
 
