@@ -19,7 +19,7 @@
 | **RFM 用户画像** | SQLAlchemy + 量化分群 | R/F/M 五分位评分 → 8 类用户分群 + 流失预警 |
 | **数据分析 Notebook** | Jupyter + Pandas | 数据清洗、销售/时间/用户多维分析 |
 | **RAG 业务知识库** | Chroma + BGE-small-zh-v1.5 | 6 份业务文档（术语/数据字典/KPI/规则/API/黄金查询）向量检索 |
-| **测试 & 评估** | pytest + 离线/真实模型评估器 | 238 项自动化测试 + 100 条路由回归 + 15 条词法检索回归 + 15 条 GLM 真实评测 |
+| **测试 & 评估** | pytest + 离线/真实模型评估器 | 229 项自动化测试（实收全绿）+ 100 条路由回归 + 15 条词法检索回归 + 15 条 GLM 真实评测 |
 
 ## 在线演示
 
@@ -210,6 +210,39 @@ FastAPI 与 Streamlit 只负责各自的配置和展示，统一调用 `agent_co
 - **有界降级**：Redis 不可用时回落到最多 1,000 个内存会话；SQL 只纠错一次，避免无限 Agent 循环。
 - **编排边界**：当前是固定 LangGraph 工作流编排，模型负责结构化 SQL 与答案生成，不声称具备自主工具规划或开放式多 Agent 协作能力。
 
+### 架构演进：从 ReAct 工具调用到确定性工作流
+
+Agent 层经历过一次重构，两个版本都保留在 Git 历史中：
+
+| | v1（已归档） | v2（当前） |
+|---|---|---|
+| 决策方 | 模型自主选择工具 | 确定性规则路由 |
+| 检索触发 | 模型调用 `query_business_knowledge` | 工作流按意图（`knowledge` / `hybrid`）调度 |
+| 来源还原 | 从 LangChain `intermediate_steps` 反解 | `AgentSource` 直接写入图状态，无需反解 |
+| 回归基线 | 难以建立（同一问题多次执行路径不稳定） | 100 条路由回归集，可防退化 |
+| 代码位置 | `rag/tools.py`、`rag/prompts.py`、`rag/extractor.py` | `agent_core/runtime.py`、`agent_core/routing.py` |
+
+**为什么收敛**：v1 让模型自主决定何时检索，灵活性更高，但带来三个问题——
+
+1. 同一问题多次执行的工具路径不稳定，无法建立可复现的回归基线；
+2. 模型倾向保守地"先查一次知识库"，简单的数据问题也要多付一次检索延迟；
+3. 来源还原依赖 LangChain 的 `intermediate_steps` 内部结构，框架升级时易碎。
+
+**v2 的取舍**：路由规则化后，安全拦截、澄清和常见业务意图不消耗模型额度，
+结果可重复，并能用 100 条评测集防退化（多数类基线 52/100，当前 100/100）；
+检索改由工作流按意图调度，`knowledge` 分支完全不接触数据库，
+`data` 分支不加载知识库，互不拖累。
+
+**代价**：放弃模型自主工具规划能力。规则覆盖不到的长尾表述会误判意图；
+且 100/100 只用于防回归——数据集与规则同仓维护，**不代表未见问题上的泛化准确率**。
+
+**查看 v1 实现**（归档 tag）：
+
+```bash
+git show archive-react-v1:ai-ecommerce-assistant/rag/tools.py
+git show archive-react-v1:ai-ecommerce-assistant/rag/prompts.py
+git show archive-react-v1:ai-ecommerce-assistant/rag/extractor.py
+```
 
 ### 知识库文档（`ai-ecommerce-assistant/knowledge_base/`）
 
@@ -270,7 +303,7 @@ RAG 模块内置轻量级监控层，把"检索质量 + 性能 + 用户反馈"�
 | 维度 | 来源 | 字段 |
 |------|------|------|
 | 检索器（retriever） | `Retriever.get_stats()` | `cache_hits` / `store_hits` / `timeouts` / `no_results` / `avg_latency_ms` / `hit_rate_pct` / `score_buckets` / `total_queries` |
-| 工具调用（tool） | `metrics.record_tool_call()` | `tool_call_count` / `tool_no_hit_count` / `tool_error_count` |
+| 工具调用（tool） | `metrics.record_tool_call()` | `tool_call_count` / `tool_no_hit_count` / `tool_error_count`（v1 ReAct 由模型触发；v2 工作流下无生产调用方，保留为监控 API，恒为 0） |
 | 结构化事件 | `metrics.log_event()` | `ts` / `event` / `query` / `top1_score` / `hits` / `ms` / `cache_hit` / `source` |
 
 ### 2. 端点（无需鉴权）
@@ -306,9 +339,10 @@ rag_query_total 42
 rag_score_bucket{range="[0.4,0.6)"} 5
 rag_score_bucket{range="[0.8,1.0]"} 12
 
-# HELP rag_tool_call_total Agent invoked query_business_knowledge
+# HELP rag_tool_call_total Agent invoked the knowledge tool
 # TYPE rag_tool_call_total counter
-rag_tool_call_total 18
+# v2 收敛为确定性工作流后，工具调用不再由模型发起，该计数恒为 0
+rag_tool_call_total 0
 ```
 
 ### 3. 落盘策略
@@ -330,7 +364,7 @@ rag_tool_call_total 18
 
 | Workflow | 触发 | 职责 |
 |----------|------|------|
-| `.github/workflows/ci.yml` | PR / push main | AI 助手 107 项测试（Python 3.12 + 3.13）+ 后端 131 项测试（MySQL 8）+ Ruff + 编译 + 离线 Agent 评测；日志管道启用 `pipefail`，测试失败不会被 `tee` 掩盖 |
+| `.github/workflows/ci.yml` | PR / push main | AI 助手 85 项测试（Python 3.12 + 3.13）+ 后端 144 项测试（MySQL 8）+ Ruff + 编译 + 离线 Agent 评测；日志管道启用 `pipefail`，测试失败不会被 `tee` 掩盖 |
 | `.github/workflows/docker-smoke.yml` | PR / push main | 空卷构建全栈、断言 102,287 行、验证 7 个入口与 WebSocket 握手 |
 | `.github/workflows/release.yml` | push main / tag `v*.*.*` / 手动 | 构建 backend / streamlit / ai-assistant 三个 Docker 镜像，**多架构**（linux/amd64 + linux/arm64），推送到 `ghcr.io/super-zxq/ai-commerce-intelligence-platform-{backend,streamlit,ai-assistant}` |
 
@@ -429,35 +463,46 @@ docker compose pull && docker compose up -d
 
 ## 测试与评估
 
-### 自动化测试（238 项）
+### 自动化测试（229 项，实收全绿）
 
 ```bash
-# 后端（131 项，完整运行需要 MySQL）
+# 后端（144 项，完整运行需要 MySQL）
 python -m pytest backend/tests/ -v
 
-# AI/RAG（107 项）
+# AI/RAG（85 项）
 python -m pytest ai-ecommerce-assistant/tests/ -v
 ```
 
 **测试覆盖：**
+
+后端（144 项）：
 - `test_agent_runtime_core.py` — 分支工具顺序、SQL AST、一次重试、用户会话隔离、Redis 降级、Token `null` 语义和 API 兼容
 - `test_agent_workflow.py` / `test_agent_evaluation.py` — 意图路由和离线发布门槛；安全短路与工具顺序由 Runtime 测试覆盖
+- `test_agent_streaming.py` — 流式步骤与 Token 增量下发，返回值与非流式调用一致
 - `test_live_model_evaluation.py` — 真实评测集约束、结果集比较与共享 Schema 描述
-- `test_rag_prompts.py` — 提示词模板（工具说明、决策树、回答模板）
-- `test_rag_tools.py` — sentinel 序列化 + Tool 工厂（空命中/异常/正常）
-- `test_rag_extractor.py` — 从 `intermediate_steps` 还原来源（多步聚合、类型防御）
+- `test_api.py` / `test_core_safety.py` / `test_security_hardening.py` / `test_mysql_execution_timeout.py` — API 契约、SQL 只读防护、安全加固、数据库侧执行时限
+
+AI/RAG（85 项）：
 - `test_vector_store.py` — Chroma 增删查改（fake embedder，不依赖真实模型）
 - `test_retriever.py` — 缓存/TTL/LRU/阈值/超时/格式化/stats
 - `test_rag_metrics.py` — score_buckets / tool_call 计数 / 原子写入 / JSON 加载 / Prometheus 渲染 / 结构化事件 / JSONL 落盘 / 反馈写文件
 - `test_build_kb.py` — 文档切分函数（doc_type、doc_id、滑动窗口）
+- `test_lazy_rag.py` — 93MB Embedding 模型懒加载，导入 `rag` 包不触发下载
 
 AI/RAG 测试不依赖真实 BGE 模型，用 `tests/conftest.py` 里的 `FakeEmbeddings` 生成确定性归一化向量。
 
-**测试规模（实收，非估填）：** 仓库共定义 **208** 个测试函数（`backend/tests` 107 + `ai-ecommerce-assistant/tests` 101）。
-本机可执行验证结果：
-- `backend` 套件执行 **144** 用例（127 通过，17 项因无本地 MySQL 连接报 `1045 Access denied` 失败——属环境依赖，非代码回归；CI 中由 `init_ci_schema.py` 建表后全绿）。
-- `ai-ecommerce-assistant` 套件中仅 `test_lazy_rag.py`（**5** 项）在本环境可收集执行并通过；其余 7 个模块依赖 `langchain_huggingface`（本环境未安装）无法收集，CI 中具备 Embedding 依赖时运行。
-- 前端：`backend/static/index.html` 拆分为 `css/studio.css` + `js/studio.js`，并经 Impeccable detector（0 critical/0 error）与桌面三视口（1366×768 / 1440×900 / 1920×1080）验收 `badCount=0`。
+**测试规模（实收，非估填）** — 2026-09-04 在本仓库 `.venv`（Python 3.12）实测：
+
+| 套件 | pytest 收集 | 结果 |
+|------|------------|------|
+| `backend/tests` | 144 | **144 passed**（47s） |
+| `ai-ecommerce-assistant/tests` | 85 | **85 passed**（9s） |
+| **合计** | **229** | **229 passed / 0 failed** |
+
+数字为参数化展开后的 pytest 实收用例数，非静态函数计数。
+后端套件需本地 MySQL 可连接（CI 中由 `init_ci_schema.py` 建表后运行）；AI/RAG 套件不依赖网络与真实模型。
+
+前端：`backend/static/index.html` 拆分为 `css/studio.css` + `js/studio.js`，并经 Impeccable detector（0 critical/0 error）与桌面三视口（1366×768 / 1440×900 / 1920×1080）验收 `badCount=0`。
 
 ### 安全边界
 
@@ -548,7 +593,7 @@ ai-commerce-intelligence-platform/
 │   ├── scripts/                  # CI / 工具脚本
 │   │   ├── init_ci_schema.py     # CI 建表 + 5 条 fake orders seed
 │   │   └── sync_orders.py        # CSV 哈希校验 + 原子换表
-│   ├── tests/                    # 107 项 API 单元测试
+│   ├── tests/                    # 144 项 API 单元测试
 │   ├── requirements.txt          # 后端生产依赖
 │   └── requirements-dev.txt      # 后端测试与静态检查依赖
 ├── streamlit_app.py              # BI 数据看板（Streamlit 多页面）
@@ -556,15 +601,12 @@ ai-commerce-intelligence-platform/
 │   ├── app.py                    # 主应用
 │   ├── build_knowledge_base.py   # 知识库构建脚本
 │   ├── knowledge_base/           # 6 份业务知识 Markdown
-│   ├── rag/                      # RAG 核心模块
+│   ├── rag/                      # RAG 核心模块（检索由 agent_core 工作流调度）
 │   │   ├── embeddings.py         # BGE Embedding 工厂
 │   │   ├── vector_store.py       # Chroma 封装
 │   │   ├── retriever.py          # 缓存/超时/格式化/埋点
-│   │   ├── prompts.py            # 提示词 + 工具说明
-│   │   ├── tools.py              # LangChain Tool 工厂
-│   │   ├── extractor.py          # 来源还原（无 streamlit 依赖）
 │   │   └── metrics.py            # 跨进程 stats 共享 + Prometheus 渲染 + JSONL 事件
-│   ├── tests/                    # 101 项 AI/RAG 测试
+│   ├── tests/                    # 85 项 AI/RAG 测试
 │   ├── eval/                     # 评估集 + 评估脚本
 │   ├── data/chroma/              # Chroma 持久化目录
 │   ├── pytest.ini                # pytest 配置
@@ -600,12 +642,12 @@ ai-commerce-intelligence-platform/
 | ORM | SQLAlchemy 2.0 (async) |
 | 前端 | Streamlit 1.28+ + Plotly |
 | AI | LangGraph + LangChain + OpenAI 兼容模型接口 |
-| RAG | Chroma（向量库） + BGE-small-zh-v1.5（Embedding） + LangChain Tool |
+| RAG | Chroma（向量库） + BGE-small-zh-v1.5（Embedding），由确定性工作流按意图调度 |
 | 数据库 | MySQL 8.0 |
 | 缓存 | Redis 7 |
 | 反代 | Nginx |
 | 容器 | Docker + Docker Compose |
-| 测试 | pytest（131 项后端 + 107 项 AI/RAG）+ 100 条路由回归 + 15 条词法检索回归 + 15 条 GLM 真实评测 |
+| 测试 | pytest（144 项后端 + 85 项 AI/RAG，实收全绿）+ 100 条路由回归 + 15 条词法检索回归 + 15 条 GLM 真实评测 |
 
 ## License
 

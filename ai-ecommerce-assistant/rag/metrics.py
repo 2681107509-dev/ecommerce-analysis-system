@@ -2,7 +2,9 @@
 
 设计：
 - retriever 写自己的 stats（retriever 内部）
-- tools.py 调 `record_tool_call(hit, error)` 写工具调用 stats
+- `record_tool_call(hit, error)` 写工具调用 stats。v1 的 ReAct 工具由模型
+  自主触发并调用它；v2 收敛为确定性工作流后，工具调用不再由模型发起，
+  因此该函数当前无生产调用方，保留作为监控 API 供未来接入工具时使用。
 - retriever 在 dump 时合并两个数据源 → 写一个综合 JSON 文件
 - FastAPI /metrics 端点读取这个 JSON
 

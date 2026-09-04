@@ -80,7 +80,8 @@ web
 - 评测集：`agent_core/eval/agent_cases.jsonl` 100 条路由回归、`rag_cases.jsonl` 15 条词法检索回归、`live_model_cases.jsonl` 15 条真实模型评测 ✓
 - 真实模型评测快照：`docs/evaluation/README.md` + `glm-4-flash-250414.json`——2026-09-01 运行，glm-4-flash-250414，14/15 通过（93.33%），结构化输出 100%，SQL 结果正确率 90%，知识关键词覆盖与引用完整率 100%，P50/P95 延迟 1,508/8,941 ms，Token 6,894；唯一失败项（整体客单价）保留在报告中 ✓
 - 离线评测声明（README）：路由回归 100/100（多数类基线 52/100）；词法检索 Recall@3 100%、MRR 0.7444——属同仓防回归指标，不代表泛化准确率，引用时须带限定语
-- 自动化测试：README 与 CI 声明 238 项（后端 131 + AI/RAG 107）；静态函数计数为 195（参数化展开后更多），**pytest 实收待审计工作区建立 .venv 后核实，页面上引用前先实跑**
+- 自动化测试（2026-09-04 在本仓库 `.venv` 实收）：后端 144 项 + AI/RAG 85 项 = **229 项，pytest 全绿**。数字为参数化展开后实收用例数，非静态函数计数。后端需本地 MySQL 可连接，CI 由 `init_ci_schema.py` 建表后运行
+- 架构演进：v1 的 LangChain ReAct 工具调用（`rag/tools.py`、`rag/prompts.py`、`rag/extractor.py`）已删除，归档于 git tag `archive-react-v1`；v2 为确定性工作流（检索由 `agent_core` 按意图调度）。详见 README「架构演进」
 - API 操作数：32 ✓（25 router + 8 app 级 − 1 个 schema 外）
 - 版本：v1.0.3（tag 存在；当前分支为 v1.0.3 + msgpack 修复）✓
 - 知识库：6 份 Markdown（术语/数据字典/KPI/规则/API/黄金查询）✓

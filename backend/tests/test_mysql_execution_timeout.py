@@ -26,12 +26,17 @@ def test_mysql_max_execution_time_interrupts_query_and_releases_connection() -> 
             UNION ALL
             SELECT n + 1 FROM cte
         )
-        SELECT /*+ MAX_EXECUTION_TIME(100) SET_VAR(cte_max_recursion_depth = 1M) */ * FROM cte
+        SELECT /*+ MAX_EXECUTION_TIME(100) */ * FROM cte
     """
 
     try:
         with pytest.raises(DBAPIError) as exc_info:
             with engine.connect() as connection:
+                # 递归深度必须在会话级抬高：否则查询会先撞上 cte_max_recursion_depth
+                # 上限报 3636，轮不到 MAX_EXECUTION_TIME 的 3024 中断，测试就从
+                # "验证执行时限生效"退化成"验证递归深度上限"。
+                # 早期用 SET_VAR 提示设置该值时偶发失效，曾导致间歇性断言失败。
+                connection.execute(text("SET SESSION cte_max_recursion_depth = 1048576"))
                 connection.execute(text(runaway_cte))
 
         assert exc_info.value.orig.args[0] == 3024
