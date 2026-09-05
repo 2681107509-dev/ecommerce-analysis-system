@@ -157,6 +157,11 @@ class AgentRuntime:
         graph.add_edge("finalize", END)
         self._graph = graph.compile()
 
+    @property
+    def conversations(self) -> ConversationStore:
+        """暴露会话存储，供调用方实现"重新生成"等需要删除轮次的操作。"""
+        return self._conversations
+
     @staticmethod
     def _event(name: str, started: float, summary: str, status: str = "success") -> AgentStep:
         return AgentStep(

@@ -182,13 +182,15 @@ async def test_rfm_top_users_honors_requested_limit(monkeypatch):
 
 
 class _FakeRedis:
+    """与 redis.asyncio 客户端同构的 fake：方法可 await。"""
+
     def __init__(self):
         self.data = {}
 
-    def setex(self, key, _ttl, value):
+    async def setex(self, key, _ttl, value):
         self.data[key] = value
 
-    def get(self, key):
+    async def get(self, key):
         return self.data.get(key)
 
 

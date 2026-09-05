@@ -9,8 +9,6 @@ import re
 
 import pandas as pd
 
-from backend.utils.text_cleaner import clean_sql
-
 
 def parse_data_from_answer(answer: str) -> pd.DataFrame | None:
     if not answer or not isinstance(answer, str):
@@ -111,11 +109,6 @@ def _is_garbled_key(key: str) -> bool:
     if re.search(r'^\d+\s*rows?(?:\s|$)', key, re.IGNORECASE):
         return True
     return False
-
-
-def clean_sql_local(sql: str) -> str:
-    """兼容旧调用：自动剥除 HTML 标签。"""
-    return clean_sql(sql, strip_html=True)
 
 
 def strip_markdown_tables(text: str) -> str:

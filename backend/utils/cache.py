@@ -16,6 +16,8 @@ DEFAULT_TTL = 300
 _MEMORY_CACHE_MAX_SIZE = 1000
 
 _memory_cache: dict[str, dict] = {}
+# redis.asyncio.Redis 实例；同步客户端在 async 路径里会把事件循环阻塞到
+# socket_timeout（Redis 抖动时全站卡死），因此全链路统一使用异步客户端。
 _redis_client = None
 _redis_available = False
 
@@ -46,14 +48,17 @@ def _release_lock_if_idle(key: str) -> None:
         _cache_locks.pop(key, None)
 
 
-def init_redis(redis_url: str) -> bool:
+async def init_redis(redis_url: str) -> bool:
     global _redis_client, _redis_available
     try:
-        import redis
-        _redis_client = redis.from_url(redis_url, decode_responses=True, socket_connect_timeout=3, socket_timeout=3)
-        _redis_client.ping()
+        from redis.asyncio import from_url
+
+        _redis_client = from_url(
+            redis_url, decode_responses=True, socket_connect_timeout=3, socket_timeout=3
+        )
+        await _redis_client.ping()
         _redis_available = True
-        logger.info("✅ Redis 缓存已连接")
+        logger.info("✅ Redis 缓存已连接（asyncio 客户端）")
         return True
     except Exception as e:
         _redis_available = False
@@ -62,17 +67,29 @@ def init_redis(redis_url: str) -> bool:
         return False
 
 
-def check_redis_health() -> dict:
+async def close_redis() -> None:
+    """关闭异步客户端连接池（lifespan shutdown 时调用，避免悬挂连接）。"""
+    global _redis_client, _redis_available
+    if _redis_client is not None:
+        try:
+            await _redis_client.aclose()
+        except Exception:
+            pass
+    _redis_client = None
+    _redis_available = False
+
+
+async def check_redis_health() -> dict:
     if not _redis_available or _redis_client is None:
         return {"status": "disabled", "backend": "memory"}
     try:
-        _redis_client.ping()
-        info = _redis_client.info("memory")
+        await _redis_client.ping()
+        info = await _redis_client.info("memory")
         return {
             "status": "ok",
             "backend": "redis",
             "used_memory_human": info.get("used_memory_human", "N/A"),
-            "keys": _redis_client.dbsize(),
+            "keys": await _redis_client.dbsize(),
         }
     except Exception as e:
         return {"status": "error", "detail": str(e), "backend": "redis_fallback_memory"}
@@ -93,7 +110,13 @@ def _to_jsonable(value: Any) -> Any:
     return value
 
 
-def _cache_contains(key: str) -> bool:
+def _evict_memory_entry(key: str) -> None:
+    """从内存缓存删除条目并尝试回收对应的防击穿锁。"""
+    _memory_cache.pop(key, None)
+    _release_lock_if_idle(key)
+
+
+async def _cache_contains(key: str) -> bool:
     """判断缓存键是否已存在且未过期。
 
     get() 返回 None 可能是「未缓存」也可能是「缓存的值为 None」，
@@ -102,23 +125,22 @@ def _cache_contains(key: str) -> bool:
     """
     if _redis_available and _redis_client:
         try:
-            return _redis_client.get(key) is not None
+            return await _redis_client.get(key) is not None
         except Exception:
             return False
     entry = _memory_cache.get(key)
     if entry is None:
         return False
     if entry["expires_at"] < time.time():
-        del _memory_cache[key]
-        _release_lock_if_idle(key)
+        _evict_memory_entry(key)
         return False
     return True
 
 
-def get(key: str) -> Any | None:
+async def get(key: str) -> Any | None:
     if _redis_available and _redis_client:
         try:
-            raw = _redis_client.get(key)
+            raw = await _redis_client.get(key)
             if raw is not None:
                 return json.loads(raw)
             return None
@@ -128,16 +150,15 @@ def get(key: str) -> Any | None:
     if entry is None:
         return None
     if entry["expires_at"] < time.time():
-        del _memory_cache[key]
-        _release_lock_if_idle(key)
+        _evict_memory_entry(key)
         return None
     return entry["data"]
 
 
-def set(key: str, value: Any, ttl: int = DEFAULT_TTL) -> None:
+async def set(key: str, value: Any, ttl: int = DEFAULT_TTL) -> None:
     if _redis_available and _redis_client:
         try:
-            _redis_client.setex(key, ttl, json.dumps(_to_jsonable(value), default=str))
+            await _redis_client.setex(key, ttl, json.dumps(_to_jsonable(value), default=str))
             return
         except Exception as e:
             logger.warning(f"Redis SET 失败，降级内存: {e}")
@@ -145,44 +166,34 @@ def set(key: str, value: Any, ttl: int = DEFAULT_TTL) -> None:
         now = time.time()
         expired = [k for k, v in _memory_cache.items() if v["expires_at"] < now]
         for k in expired:
-            del _memory_cache[k]
-            _release_lock_if_idle(k)
+            _evict_memory_entry(k)
         if len(_memory_cache) >= _MEMORY_CACHE_MAX_SIZE:
             oldest_key = next(iter(_memory_cache))
-            del _memory_cache[oldest_key]
-            _release_lock_if_idle(oldest_key)
+            _evict_memory_entry(oldest_key)
     _memory_cache[key] = {"data": value, "expires_at": time.time() + ttl}
 
 
-def delete(key: str) -> None:
+async def clear() -> None:
+    """清空全部缓存（含防击穿锁）。仅限启动期调用：此时不可能有协程
+    正持有锁等待计算，运行期清锁会让 single-flight 短暂失效。"""
     if _redis_available and _redis_client:
         try:
-            _redis_client.delete(key)
-        except Exception:
-            pass
-    _memory_cache.pop(key, None)
-    _cache_locks.pop(key, None)
-
-
-def clear() -> None:
-    if _redis_available and _redis_client:
-        try:
-            _redis_client.flushdb()
+            await _redis_client.flushdb()
         except Exception:
             pass
     _memory_cache.clear()
     _cache_locks.clear()
 
 
-def stats() -> dict:
+async def stats() -> dict:
     if _redis_available and _redis_client:
         try:
-            _redis_client.ping()
-            info = _redis_client.info("memory")
+            await _redis_client.ping()
+            info = await _redis_client.info("memory")
             return {
                 "status": "ok",
                 "backend": "redis",
-                "keys": _redis_client.dbsize(),
+                "keys": await _redis_client.dbsize(),
                 "memory_human": info.get("used_memory_human", "N/A"),
             }
         except Exception:
@@ -224,7 +235,7 @@ def cached(ttl: int = DEFAULT_TTL):
         async def wrapper(*args, **kwargs):
             cache_args, cache_kwargs = _cache_key_args(args, kwargs)
             cache_key = f"{func.__module__}.{func.__name__}:{_make_key(*cache_args, **cache_kwargs)}"
-            cached_result = get(cache_key)
+            cached_result = await get(cache_key)
             if cached_result is not None:
                 logger.debug(f"缓存命中: {cache_key}")
                 return (
@@ -240,15 +251,15 @@ def cached(ttl: int = DEFAULT_TTL):
                 async with key_lock.lock:
                     # 用存在性判断而非 get() is not None：
                     # 缓存值本身可能为 None，误判会导致 single-flight 失效
-                    if _cache_contains(cache_key):
-                        cached_result = get(cache_key)
+                    if await _cache_contains(cache_key):
+                        cached_result = await get(cache_key)
                         return (
                             return_adapter.validate_python(cached_result)
                             if return_adapter
                             else cached_result
                         )
                     result = await func(*args, **kwargs)
-                    set(cache_key, result, ttl=ttl)
+                    await set(cache_key, result, ttl=ttl)
                     logger.debug(f"已缓存: {cache_key} (TTL={ttl}s)")
                     return result
             finally:
@@ -257,33 +268,12 @@ def cached(ttl: int = DEFAULT_TTL):
     return decorator
 
 
-def invalidate_pattern(pattern: str) -> int:
-    count = 0
-    if _redis_available and _redis_client:
-        try:
-            cursor = 0
-            while True:
-                cursor, keys = _redis_client.scan(cursor, match=f"*{pattern}*", count=100)
-                if keys:
-                    count += _redis_client.delete(*keys)
-                if cursor == 0:
-                    break
-        except Exception:
-            pass
-    keys_to_delete = [k for k in _memory_cache if pattern in k]
-    for k in keys_to_delete:
-        del _memory_cache[k]
-        _cache_locks.pop(k, None)
-        count += 1
-    return count
-
-
 def cleanup_memory_cache() -> int:
+    """清理过期内存条目与孤立锁（纯内存操作，后台任务同步调用即可）。"""
     now = time.time()
     expired = [k for k, v in _memory_cache.items() if v["expires_at"] < now]
     for k in expired:
-        del _memory_cache[k]
-        _release_lock_if_idle(k)
+        _evict_memory_entry(k)
 
     # Redis 模式没有本地缓存条目，但每个唯一请求仍会创建一次防击穿锁。
     # 仅清理无人取用且未持有的孤立锁，避免高基数请求导致锁字典持续增长。

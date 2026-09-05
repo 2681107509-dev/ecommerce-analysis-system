@@ -19,7 +19,7 @@
 | **RFM 用户画像** | SQLAlchemy + 量化分群 | R/F/M 五分位评分 → 8 类用户分群 + 流失预警 |
 | **数据分析 Notebook** | Jupyter + Pandas | 数据清洗、销售/时间/用户多维分析 |
 | **RAG 业务知识库** | Chroma + BGE-small-zh-v1.5 | 6 份业务文档（术语/数据字典/KPI/规则/API/黄金查询）向量检索 |
-| **测试 & 评估** | pytest + 离线/真实模型评估器 | 232 项自动化测试（实收全绿）+ 135 条路由回归（100 curated + 25 鲁棒性 + 10 留出）+ 15 条词法检索回归 + 15 条 GLM 真实评测 |
+| **测试 & 评估** | pytest + 离线/真实模型评估器 | 244 项自动化测试（实收全绿）+ 135 条路由回归（100 curated + 25 鲁棒性 + 10 留出）+ 15 条词法检索回归 + Text-to-SQL 评估 + 15 条 GLM 真实评测 |
 
 ## 在线演示
 
@@ -235,6 +235,8 @@ Agent 层经历过一次重构，两个版本都保留在 Git 历史中：
 
 **代价**：放弃模型自主工具规划能力。规则覆盖不到的长尾表述会误判意图；
 且 100/100 只用于防回归——数据集与规则同仓维护，**不代表未见问题上的泛化准确率**。
+
+> 📐 双检索器（向量检索 vs 词面基线）并存的取舍与收敛计划见 [ADR 0001](docs/adr/0001-dual-retriever.md)。
 
 **A/B 量化**：为验证这一取舍而非仅口头声明，`agent_core/eval/ab_routing_eval.py`
 将规则路由（A 侧）与 LLM 路由（B 侧，`agent_core/llm_router.py`）放在同一评测集上对照：
@@ -477,42 +479,44 @@ docker compose pull && docker compose up -d
 
 ## 测试与评估
 
-### 自动化测试（232 项，实收全绿）
+### 自动化测试（244 项，实收全绿）
 
 ```bash
-# 后端（147 项，完整运行需要 MySQL）
+# 后端（156 项，完整运行需要 MySQL）
 python -m pytest backend/tests/ -v
 
-# AI/RAG（85 项）
+# AI/RAG（88 项）
 python -m pytest ai-ecommerce-assistant/tests/ -v
 ```
 
 **测试覆盖：**
 
-后端（147 项）：
-- `test_agent_runtime_core.py` — 分支工具顺序、SQL AST、一次重试、用户会话隔离、Redis 降级、Token `null` 语义和 API 兼容
+后端（156 项）：
+- `test_agent_runtime_core.py` — 分支工具顺序、SQL AST、一次重试、用户会话隔离（含重新生成的末轮回删）、Redis 降级、Token `null` 语义和 API 兼容
 - `test_agent_workflow.py` / `test_agent_evaluation.py` — 意图路由和离线发布门槛；安全短路与工具顺序由 Runtime 测试覆盖
 - `test_routing_ab.py` — 路由 A/B 三层基线回归：curated ≥97% / dev ≥92%（加固后）/ 留出集 ≥50%（冻结 gold，真实泛化下限）
 - `test_agent_streaming.py` — 流式步骤与 Token 增量下发，返回值与非流式调用一致
 - `test_live_model_evaluation.py` — 真实评测集约束、结果集比较与共享 Schema 描述
-- `test_api.py` / `test_core_safety.py` / `test_security_hardening.py` / `test_mysql_execution_timeout.py` — API 契约、SQL 只读防护、安全加固、数据库侧执行时限
+- `test_api.py` / `test_core_safety.py` / `test_security_hardening.py` / `test_mysql_execution_timeout.py` — API 契约、SQL 只读防护（含 FOR SHARE/NOWAIT 锁子句）、安全加固（缓存锁/限流/监控路径归一化）、数据库侧执行时限
 
-AI/RAG（85 项）：
+AI/RAG（88 项）：
 - `test_vector_store.py` — Chroma 增删查改（fake embedder，不依赖真实模型）
-- `test_retriever.py` — 缓存/TTL/LRU/阈值/超时/格式化/stats
-- `test_rag_metrics.py` — score_buckets / tool_call 计数 / 原子写入 / JSON 加载 / Prometheus 渲染 / 结构化事件 / JSONL 落盘 / 反馈写文件
+- `test_retriever.py` — 缓存/TTL/LRU/阈值/超时/stats，以及**检索异常不写缓存**回归
+- `test_rag_metrics.py` — score_buckets / 原子写入 / JSON 加载 / 结构化事件 / JSONL 落盘 / 反馈写文件
 - `test_build_kb.py` — 文档切分函数（doc_type、doc_id、滑动窗口）
-- `test_lazy_rag.py` — 93MB Embedding 模型懒加载，导入 `rag` 包不触发下载
+- `test_lazy_rag.py` — 93MB Embedding 模型懒加载；导入 `rag` 包不触发下载；status 引用始终可读到最新状态
+- `test_render_highlights.py` — 答案渲染纯函数：HTML 实体/行内代码/代码块中的数字不被高亮破坏
+- `test_sql_eval.py` — Text-to-SQL 评估纯函数（gold SQL 过生产 AST 闸门、关键词归一化匹配），不依赖 API Key
 
 AI/RAG 测试不依赖真实 BGE 模型，用 `tests/conftest.py` 里的 `FakeEmbeddings` 生成确定性归一化向量。
 
-**测试规模（实收，非估填）** — 2026-09-04 在本仓库 `.venv`（Python 3.12）实测：
+**测试规模（实收，非估填）** — 2026-09-05 在本仓库 `.venv`（Python 3.12）实测：
 
 | 套件 | pytest 收集 | 结果 |
 |------|------------|------|
-| `backend/tests` | 147 | **147 passed**（48s） |
-| `ai-ecommerce-assistant/tests` | 85 | **85 passed**（9s） |
-| **合计** | **232** | **232 passed / 0 failed** |
+| `backend/tests` | 156 | **156 passed**（57s） |
+| `ai-ecommerce-assistant/tests` | 88 | **88 passed**（9s） |
+| **合计** | **244** | **244 passed / 0 failed** |
 
 数字为参数化展开后的 pytest 实收用例数，非静态函数计数。
 后端套件需本地 MySQL 可连接（CI 中由 `init_ci_schema.py` 建表后运行）；AI/RAG 套件不依赖网络与真实模型。
@@ -552,13 +556,38 @@ python eval/run_eval.py --real
 python eval/run_eval.py --report eval/my_report.md
 ```
 
-评估集覆盖 10 条知识问答（术语/公式/字段/规则/API）+ 10 条数据查询（SQL 类不参与 RAG 评估）。报告自动生成 `eval/report.md`（人类可读）+ `eval/report.json`（机器可读）。
+评估集覆盖 10 条知识问答（术语/公式/字段/规则/API）+ 10 条数据查询。报告自动生成 `eval/report.md`（人类可读）+ `eval/report.json`（机器可读）。
 
 **关键指标：**
 - 命中率（命中含 expected_keywords 的文档数 / 总数）
 - 实际命中 doc_type 与期望 doc_type 一致性
 - Top1 score
 - 单次检索耗时
+
+### Text-to-SQL 评估（10 条 data 用例）
+
+数据查询（d01-d10）的 SQL 生成能力由 `eval/run_sql_eval.py` 单独评估，补齐"检索有指标、生成靠感觉"的缺口：
+
+```bash
+cd ai-ecommerce-assistant
+
+# 需要 LLM_API_KEY；生成 → 生产同一道 sqlglot AST 只读闸门 → gold 关键词命中
+python eval/run_sql_eval.py
+
+# AST 校验通过后落库执行，记录行数/执行错误
+python eval/run_sql_eval.py --execute
+
+# 落盘 JSON + Markdown 报告
+python eval/run_sql_eval.py --output eval/sql_eval_report.json
+```
+
+**关键指标：**
+- AST 只读校验通过率（与生产 `validate_and_limit_sql` 同一道闸门）
+- gold 关键词全命中率（归一化大小写/空白/反引号后匹配）
+- 综合通过率与逐条失败明细（生成的 SQL、未命中关键词）
+- 可选：实际执行行数
+
+评估核心逻辑（`check_sql_keywords` / gold SQL 过闸门）由 `tests/test_sql_eval.py` 在无 API Key 环境下覆盖。
 
 ### 真实模型评测
 
@@ -664,7 +693,7 @@ ai-commerce-intelligence-platform/
 | 缓存 | Redis 7 |
 | 反代 | Nginx |
 | 容器 | Docker + Docker Compose |
-| 测试 | pytest（147 项后端 + 85 项 AI/RAG，实收全绿）+ 135 条路由回归（100 curated + 25 鲁棒性 + 10 留出）+ 15 条词法检索回归 + 15 条 GLM 真实评测 |
+| 测试 | pytest（156 项后端 + 88 项 AI/RAG，实收全绿）+ 135 条路由回归（100 curated + 25 鲁棒性 + 10 留出）+ 15 条词法检索回归 + Text-to-SQL 评估 + 15 条 GLM 真实评测 |
 
 ## License
 

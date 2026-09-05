@@ -63,11 +63,3 @@ def get_embeddings(model_name: str = DEFAULT_MODEL,
         _cached[cache_key] = embed
         logger.info("✅ Embedding 加载完成")
         return embed
-
-
-def warm_up():
-    """预热：在 Streamlit 启动时同步调用，避免首次查询时下载卡顿。"""
-    embed = get_embeddings()
-    # 触发模型加载
-    embed.embed_query("warm up")
-    return embed

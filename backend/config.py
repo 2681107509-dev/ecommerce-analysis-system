@@ -68,6 +68,10 @@ class Settings(BaseSettings):
         "http://localhost:8505",
         "http://localhost:8000",
     ])
+    # 是否信任 X-Real-IP / X-Forwarded-For 作为限流客户端标识。
+    # 反代（Nginx/Docker）部署必须开启：否则所有请求的 client.host 都是网关 IP，
+    # 全体用户共享一个限流桶，单个高频用户即可让全站触发 429（变相 DoS）。
+    # 直接对公网暴露时保持 False：XFF 第一个 IP 由客户端可控，开启可被伪造绕过限流。
     trust_proxy_headers: bool = False
 
     default_page_size: int = 20

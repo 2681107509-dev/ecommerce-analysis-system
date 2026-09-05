@@ -104,7 +104,3 @@ if __name__ == "__main__":
         print("用法: python -m backend.utils.auth <明文密码>")
         raise SystemExit(1)
     print(_hash_password(sys.argv[1]))
-
-
-def generate_api_key() -> str:
-    return f"ea_{secrets.token_urlsafe(32)}"

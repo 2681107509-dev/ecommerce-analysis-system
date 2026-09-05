@@ -30,17 +30,6 @@ async def get_current_user(
     return {"username": token_data.username}
 
 
-def optional_auth(
-    credentials: HTTPAuthorizationCredentials | None = Depends(security),
-) -> dict | None:
-    if credentials is None:
-        return None
-    token_data = decode_token(credentials.credentials)
-    if token_data is None:
-        raise HTTPException(status_code=401, detail="认证令牌无效")
-    return {"username": token_data.username}
-
-
 @router.post("/login", response_model=TokenResponse, summary="用户登录")
 async def login(credentials: UserCredentials) -> TokenResponse:
     if not authenticate_user(credentials.username, credentials.password):

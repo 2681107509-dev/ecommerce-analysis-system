@@ -2,6 +2,8 @@ import asyncio
 import json
 import logging
 import os
+import re
+import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -29,7 +31,25 @@ _request_stats = {
 }
 
 
+# 动态路由段：纯数字 ID、UUID、长 hex。按原始路径统计时 /api/orders/{id}
+# 之类路由会为每个订单生成一个永不回收的 key（10 万订单 = 10 万个内嵌 dict，
+# 进程级内存泄漏），必须先归一化再入统计。
+_DYNAMIC_SEGMENT_RE = re.compile(
+    r"(?i)^\d+$"
+    r"|^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    r"|^[0-9a-f]{8,}$"
+)
+
+
+def _normalize_endpoint(path: str) -> str:
+    """把动态路径段归一化为 {param}，让同一路由共享一个统计 key。"""
+    segments = [seg for seg in path.strip("/").split("/") if seg]
+    normalized = ["{param}" if _DYNAMIC_SEGMENT_RE.match(seg) else seg for seg in segments]
+    return "/" + "/".join(normalized) if normalized else "/"
+
+
 def record_request(endpoint: str, status_code: int, duration_ms: float):
+    endpoint = _normalize_endpoint(endpoint)
     _request_stats["total"] += 1
     if 200 <= status_code < 400:
         _request_stats["success"] += 1
@@ -52,13 +72,14 @@ async def get_metrics():
         key=lambda x: x[1]["count"],
         reverse=True,
     )[:10]
+    cache_status = await cache_stats()
 
     return {
         "server": {
             "status": "running",
             "uptime_seconds": uptime_sec,
             "started_at": datetime.fromtimestamp(_start_time, tz=UTC).isoformat(),
-            "python_version": os.sys.version.split()[0],
+            "python_version": sys.version.split()[0],
             "process_id": os.getpid(),
         },
         "requests": {
@@ -76,7 +97,7 @@ async def get_metrics():
                 for path, stats in top_endpoints
             ],
         },
-        "cache": cache_stats(),
+        "cache": cache_status,
     }
 
 
@@ -89,12 +110,12 @@ async def detailed_health():
         checks["database"] = {"status": "error", "detail": str(e)}
 
     try:
-        checks["cache"] = cache_stats()
+        checks["cache"] = await cache_stats()
     except Exception:
         checks["cache"] = {"status": "error"}
 
     try:
-        checks["redis"] = check_redis_health()
+        checks["redis"] = await check_redis_health()
     except Exception as e:
         checks["redis"] = {"status": "error", "detail": str(e)}
 
@@ -158,7 +179,6 @@ def render_rag_prometheus(stats: dict) -> str:
         return "# no stats available\n"
 
     retriever = stats.get("retriever", {})
-    tool = stats.get("tool", {})
     metrics = {
         "rag_query_total": retriever.get("total_queries", 0),
         "rag_cache_hits_total": retriever.get("cache_hits", 0),
@@ -167,9 +187,6 @@ def render_rag_prometheus(stats: dict) -> str:
         "rag_timeouts_total": retriever.get("timeouts", 0),
         "rag_query_latency_ms": retriever.get("avg_latency_ms", 0),
         "rag_hit_rate_pct": retriever.get("hit_rate_pct", 0),
-        "rag_tool_call_total": tool.get("tool_call_count", 0),
-        "rag_tool_no_hit_total": tool.get("tool_no_hit_count", 0),
-        "rag_tool_error_total": tool.get("tool_error_count", 0),
     }
     lines = [f"{name} {value}" for name, value in metrics.items()]
     for bucket, count in (retriever.get("score_buckets") or {}).items():
@@ -194,7 +211,7 @@ def render_backend_prometheus() -> str:
 
 @router.get("/rag-stats", summary="RAG 检索统计")
 async def get_rag_stats():
-    """RAG 业务知识检索的实时统计（命中率、延迟、TopK 分布、工具调用）。
+    """RAG 业务知识检索的实时统计（命中率、延迟、TopK 分布）。
 
     数据源：ai-ecommerce-assistant 进程内的 Retriever，每 5 秒落盘一次。
     公开端点，便于监控面板 / 导航页直接调用。

@@ -95,3 +95,24 @@ def test_lazy_retriever_reuses_instance_across_calls():
         assert inner.retrieve.call_count == 2
         assert inner.get_stats.call_count == 1
         assert inner.dump_stats.call_count == 1
+
+
+def test_lazy_retriever_status_reference_stays_fresh():
+    """回归：模块层捕获的 status 引用（app.py 的 rag_status = retriever.status）
+    必须在懒加载完成后读到新值。
+
+    _ensure 曾用整体赋值替换 status dict，外部捕获的旧引用永远停留在
+    "未初始化"，导致 RAG 面板即使初始化成功也一直显示"未启用"。
+    """
+    _purge_app()
+    import app
+    r = app._LazyRetriever()
+    captured = r.status  # 与 app.py 的 rag_status 同一引用
+
+    inner = MagicMock()
+    with patch("app.init_retriever", return_value=(inner, {"ok": True, "error": None, "count": 5})):
+        r.retrieve("q")
+
+    assert captured is r.status, "status 必须原地更新，不能替换 dict 对象"
+    assert captured["ok"] is True
+    assert captured["count"] == 5

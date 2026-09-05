@@ -29,7 +29,6 @@ if _PROJECT_ROOT not in sys.path:
 from assistant_charts import create_chart
 from assistant_text_utils import (
     _convert_value,
-    clean_sql_local,
     parse_data_from_answer,
     strip_garbled_content,
     strip_markdown_tables,
@@ -45,7 +44,7 @@ from backend.utils.sql_guard import (
     ensure_read_only_sql,
     guard_read_only_engine,
 )
-from backend.utils.text_cleaner import sanitize_error
+from backend.utils.text_cleaner import clean_sql, sanitize_error
 
 load_dotenv(os.path.join(_PROJECT_ROOT, ".env"))
 
@@ -155,8 +154,34 @@ def is_sensitive_query(query: str) -> bool:
     return False
 
 
-def get_cache_key(question: str) -> str:
-    return hashlib.md5(question.encode()).hexdigest()
+# 会话内查询缓存：TTL 防止长会话后数据/配置已变仍命中旧答案；
+# 容量上限防止消息携带全量 records 导致 session 无界膨胀。
+QUERY_CACHE_TTL_SECONDS = 1800
+QUERY_CACHE_MAX_ENTRIES = 50
+
+
+def get_cache_key(question: str, fingerprint: str = "") -> str:
+    """缓存 key 必须绑定模型指纹（key:base_url:model 的哈希），
+    否则换模型/API Key 后同一问题会直接命中旧模型的缓存答案。"""
+    return hashlib.md5(f"{fingerprint}:{question}".encode()).hexdigest()
+
+
+def _cache_lookup(cache: dict, key: str) -> dict | None:
+    """带 TTL 的缓存读取；过期条目即时清除。"""
+    entry = cache.get(key)
+    if entry is None:
+        return None
+    if time.time() - entry["ts"] > QUERY_CACHE_TTL_SECONDS:
+        cache.pop(key, None)
+        return None
+    return entry["data"]
+
+
+def _cache_store(cache: dict, key: str, data: dict) -> None:
+    """写入缓存；超出上限时按写入顺序淘汰最旧条目。"""
+    while len(cache) >= QUERY_CACHE_MAX_ENTRIES:
+        cache.pop(next(iter(cache)))
+    cache[key] = {"ts": time.time(), "data": data}
 
 
 st.set_page_config(page_title="AI Commerce Intelligence Platform", layout="wide",
@@ -331,7 +356,7 @@ if "messages" not in st.session_state:
                        "- 销售额最高的 3 个商品编号和金额\n"
                        "- APP 和公众号哪个销售额高\n"
                        "- 用户复购率是多少",
-            "chart_data": None, "chart_title": "", "csv_data": None,
+            "chart_title": "", "result_data": None,
             "sql": None, "query_time": None,
         }
     ]
@@ -424,11 +449,15 @@ class _LazyRetriever:
         try:
             inner, status = init_retriever()
             self._inner = inner
-            self.status = status
         except Exception as e:
             logger.error("RAG 懒加载失败: %s", e)
-            self.status = {"ok": False, "error": str(e), "count": 0}
+            status = {"ok": False, "error": str(e), "count": 0}
             self._inner = None
+        # 必须原地更新而不是重新赋值：模块层 rag_status = retriever.status 捕获的是
+        # 同一 dict 引用，重新赋值后旧引用会永远停留在"未初始化"状态，
+        # 导致 RAG 面板即使初始化成功也一直显示"未启用"。
+        self.status.clear()
+        self.status.update(status)
 
     def retrieve(self, query: str, k: int = 3):
         self._ensure()
@@ -477,7 +506,7 @@ def get_session_runtime(_engine, _retriever):
                 section=item.get("metadata", {}).get("section", ""),
                 doc_type=item.get("metadata", {}).get("doc_type", "markdown"),
                 score=float(item.get("score", 0)),
-                snippet=re.sub(r"\\s+", " ", item.get("content", ""))[:240],
+                snippet=re.sub(r"\s+", " ", item.get("content", ""))[:240],
             )
             for item in docs
         ]
@@ -486,8 +515,15 @@ def get_session_runtime(_engine, _retriever):
         return await asyncio.to_thread(describe_table, _engine, "orders")
 
     async def execute_sql(sql: str) -> list[dict]:
-        frame = await asyncio.to_thread(run_sql_query, sql)
-        return [] if frame is None else frame.to_dict(orient="records")
+        try:
+            frame = await asyncio.to_thread(run_sql_query, sql)
+        except SQLExecutionError as exc:
+            # to_thread 的 worker 线程里 st.* 无效，脱敏原因必须在这里（脚本线程）展示；
+            # 重试仍失败时会看到两条提示，属预期。重新抛出让 Runtime 走 sql_error
+            # 路径（自动纠错重试一次后向用户报告失败），而不是把异常吞成空结果。
+            st.warning(f"查询执行失败：{exc}")
+            raise
+        return frame.to_dict(orient="records")
 
     runtime = AgentRuntime(
         retriever=retrieve_knowledge,
@@ -571,13 +607,24 @@ def render_setup_guide(db_engine) -> None:
 
 
 
-def run_sql_query(sql: str) -> pd.DataFrame | None:
+class SQLExecutionError(RuntimeError):
+    """只读 SQL 执行失败，携带已脱敏的原因文本。"""
+
+
+def run_sql_query(sql: str) -> pd.DataFrame:
+    """执行只读 SQL 并返回 DataFrame；失败时抛 SQLExecutionError（携带脱敏原因）。
+
+    注意：本函数运行在 asyncio.to_thread 的 worker 线程里，绝不能调用 st.*——
+    Streamlit 会因缺少 ScriptRunContext 静默丢弃该 UI 调用，失败原因永远到不了
+    用户眼前。脱敏原因的展示由调用方 execute_sql 协程（脚本线程）负责。
+    """
     try:
-        sql = clean_sql_local(sql)
+        # strip_html=True：模型或用户回显的 SQL 可能带着高亮 span 标签，必须剥除
+        sql = clean_sql(sql, strip_html=True)
         ensure_read_only_sql(sql)
         engine = init_engine()
         if engine is None:
-            return None
+            raise SQLExecutionError("数据库连接不可用")
         with engine.connect() as conn:
             raw_result = conn.execute(text(sql))
             cols = list(raw_result.keys())
@@ -586,8 +633,7 @@ def run_sql_query(sql: str) -> pd.DataFrame | None:
         return pd.DataFrame(converted, columns=cols)
     except Exception as exc:
         logger.warning("只读 SQL 执行失败: %s", exc, exc_info=True)
-        st.warning(f"查询执行失败：{sanitize_error(exc)}")
-        return None
+        raise SQLExecutionError(sanitize_error(exc)) from exc
 
 
 # 节点名 → 进度条文案；执行轨迹面板仍显示英文节点名与耗时明细。
@@ -639,7 +685,74 @@ def render_sql_block(sql: str, query_time: float | None = None):
     """, unsafe_allow_html=True)
 
 
-def render_answer_with_highlights(answer: str):
+def render_result_block(
+    result_df: pd.DataFrame | None,
+    *,
+    sql: str | None,
+    query_time: float | None,
+    question: str,
+    chart_title: str,
+    key_prefix: str,
+    show_metric: bool = False,
+    warn_empty: bool = False,
+) -> list[dict] | None:
+    """渲染"数据表 + 图表/指标卡 + 下载 + SQL 块"结果区。
+
+    历史回放、缓存命中、实时查询三条路径共用，避免同一渲染逻辑维护三份。
+    show_metric：实时路径对"单值/均值类"结果展示指标卡而非图表；回放路径
+    传 False 即可（存储时此类结果已置为空数据）。
+    warn_empty：是否对"SQL 执行无结果"给出警示（仅实时路径）。
+
+    Returns:
+        供消息/缓存存储的 records；单值结果或无数据时为 None。
+    """
+    if result_df is None or len(result_df) == 0:
+        if warn_empty and sql:
+            st.warning("SQL 执行无结果")
+        if sql:
+            render_sql_block(sql, query_time)
+        return None
+
+    st.dataframe(result_df, use_container_width=True, hide_index=True)
+
+    stored_records = result_df.to_dict(orient="records")
+    is_single_value = len(result_df) == 1 and len(result_df.columns) == 1
+    is_avg_question = any(k in question.lower() for k in ["平均", "avg", "mean", "per capita"])
+    if show_metric and (is_single_value or (is_avg_question and len(result_df) == 1)):
+        if is_avg_question and len(result_df.columns) > 1:
+            avg_cols = [c for c in result_df.columns
+                        if "avg" in c.lower() or "freq" in c.lower() or "per" in c.lower()]
+            target_col = avg_cols[0] if avg_cols else result_df.columns[-1]
+        else:
+            target_col = result_df.columns[0]
+        single_val = result_df.iloc[0][target_col]
+        st.metric(
+            label="查询结果",
+            value=f"{single_val:.2f}" if isinstance(single_val, (int, float)) else str(single_val),
+        )
+        stored_records = None
+    elif len(result_df.columns) >= 2:
+        fig = create_chart(result_df, chart_title, question)
+        if fig:
+            st.plotly_chart(fig, width="stretch", key=f"{key_prefix}_chart", config={
+                "displaylogo": False,
+                "modeBarButtonsToAdd": ["downloadPNG", "zoomIn", "zoomOut", "fullscreen"],
+            })
+
+    st.download_button(
+        "导出 CSV",
+        result_df.to_csv(index=False).encode("utf-8-sig"),
+        file_name="query_result.csv",
+        mime="text/csv",
+        key=f"{key_prefix}_dl",
+    )
+    if sql:
+        render_sql_block(sql, query_time)
+    return stored_records
+
+
+def _highlight_answer(answer: str) -> str:
+    """把 LLM 回答转成带数字高亮的安全 HTML（纯函数，不依赖 streamlit，便于单测）。"""
     # 1. 剥离 LLM 回答中的乱码内容（Java 对象引用、Python repr 调试输出等）
     answer = strip_garbled_content(answer)
 
@@ -647,8 +760,10 @@ def render_answer_with_highlights(answer: str):
     answer = strip_markdown_tables(answer)
     answer = html.escape(answer)
 
-    # 3. 保护 markdown 代码块（```...```），避免数字高亮污染 SQL/代码
-    # 注意：占位符不能包含数字或百分号，否则会被下面的高亮正则误匹配
+    # 3. 占位符保护：代码块（```...```）、行内代码（`...`）与 HTML 实体。
+    #    实体（如撇号 &#x27;）里的数字被高亮正则包裹后会破坏实体、渲染成乱码；
+    #    行内代码里的数字也不应被染色。占位符不能包含数字或百分号，
+    #    否则会被下面的高亮正则误匹配。
     placeholders: dict[str, str] = {}
     _idx = 0
 
@@ -667,17 +782,20 @@ def render_answer_with_highlights(answer: str):
         placeholders[key] = match.group(0)
         return key
 
-    answer = re.sub(r'```[\s\S]*?```', _protect, answer)
+    answer = re.sub(r'```[\s\S]*?```|`[^`\n]*`|&#x?[0-9a-fA-F]+;', _protect, answer)
 
-    # 4. 对非代码部分应用高亮
+    # 4. 对非保护部分应用高亮
     answer = re.sub(r'(\d+\.?\d*%?)', r'<span class="highlight-num">\1</span>', answer)
     answer = re.sub(r'【[^】]{0,4}异常预警】(.*?)(?=\n|$)', r'<div class="warning-box">异常预警\1</div>', answer)
 
-    # 5. 还原代码块
+    # 5. 还原占位内容
     for key, original in placeholders.items():
         answer = answer.replace(key, original)
+    return answer
 
-    st.markdown(answer, unsafe_allow_html=True)
+
+def render_answer_with_highlights(answer: str):
+    st.markdown(_highlight_answer(answer), unsafe_allow_html=True)
 
 
 def render_agent_steps(steps: list[dict]) -> None:
@@ -697,7 +815,9 @@ db_engine = init_engine()
 # BGE(93MB) 与 Chromadb，只有当用户真的问出 knowledge/hybrid 类问题时
 # 才会触发首次初始化。首页/纯 data 问题路径零 RAG 代价。
 retriever = _LazyRetriever()
-rag_status = retriever.status  # 初值：未初始化
+# rag_status 与 retriever.status 是同一个 dict 引用；_ensure() 原地更新它，
+# 所以首次 RAG 调用之后的 rerun 能读到最新状态（读取本身不触发懒加载）。
+rag_status = retriever.status
 runtime = get_session_runtime(db_engine, retriever)
 render_runtime_status(db_engine, rag_status)
 render_setup_guide(db_engine)
@@ -758,12 +878,12 @@ with st.sidebar:
         if rag_status.get("ok") and rag_count > 0:
             st.success("RAG 已启用")
             st.metric("向量库", f"{rag_count} chunks", label_visibility="visible")
-            if retriever:
-                stats = retriever.get_stats()
-                k1, k2 = st.columns(2)
-                k1.metric("命中率", f"{stats['hit_rate_pct']:.0f}%")
-                k2.metric("平均延迟", f"{stats['avg_latency_ms']:.0f}ms")
-                st.caption(f"缓存: {stats['cache_size']} 条")
+            # ok=True 说明懒加载已完成，此时 get_stats() 不会再次触发重初始化
+            stats = retriever.get_stats()
+            k1, k2 = st.columns(2)
+            k1.metric("命中率", f"{stats['hit_rate_pct']:.0f}%")
+            k2.metric("平均延迟", f"{stats['avg_latency_ms']:.0f}ms")
+            st.caption(f"缓存: {stats['cache_size']} 条")
         elif rag_status.get("ok"):
             st.warning("RAG 知识库为空")
             st.caption("将降级为纯 SQL 查询模式；请先构建或检查向量库。")
@@ -814,10 +934,13 @@ with st.sidebar:
     if st.button("清空对话", use_container_width=True):
         st.session_state.messages = [
             {"role": "assistant", "content": "对话已清空，继续提问吧！",
-             "chart_data": None, "chart_title": "", "csv_data": None, "sql": None, "query_time": None,
+             "chart_title": "", "result_data": None, "sql": None, "query_time": None,
              "rag_sources": []}
         ]
         st.session_state.query_cache = {}
+        # 轮换 thread_id：Agent 会话存储按 owner+thread_id 记忆上下文，
+        # 只清 UI 消息会导致"清空"后下一问仍注入最多 6 轮旧对话。
+        st.session_state.thread_id = str(uuid4())
         st.rerun()
 
     st.divider()
@@ -864,7 +987,11 @@ for msg_idx, msg in enumerate(st.session_state.messages):
                 thumbs_up = st.button("有帮助", key=f"up_{msg_idx}")
             with col2:
                 thumbs_down = st.button("需改进", key=f"down_{msg_idx}")
-            feedback_key = f"fb_{msg_idx}"
+            # 反馈状态按问答内容哈希记录，而不是消息索引：重新生成会删除消息对，
+            # 索引前移后索引 key 会把反馈错位到别的消息行上。
+            feedback_key = "fb_" + hashlib.md5(
+                (msg.get("question", "") + "\x00" + msg.get("content", "")).encode()
+            ).hexdigest()[:12]
             if "feedbacks" not in st.session_state:
                 st.session_state.feedbacks = {}
             # 落盘：仅在本次按钮被点击时记录（避免重复触发）
@@ -891,6 +1018,17 @@ for msg_idx, msg in enumerate(st.session_state.messages):
             if st.session_state.feedbacks.get(feedback_key) == "需改进":
                 if st.button("重新生成", key=f"regen_{msg_idx}", use_container_width=True):
                     st.session_state.pending_question = msg["question"]
+                    # UI 删除问答对的同时，把会话存储里对应的末轮也弹掉，
+                    # 否则重新生成的回答会以被删掉的旧答案为上下文（自我复读）。
+                    # question 参数保证只在末轮确实是这一轮时才删（防误删其他轮次）。
+                    if runtime is not None:
+                        try:
+                            asyncio.run(runtime.conversations.pop_last_turn(
+                                "streamlit-session", st.session_state.thread_id,
+                                question=msg["question"],
+                            ))
+                        except Exception as exc:
+                            logger.warning("弹出会话末轮失败: %s", exc)
                     # 替换这一轮问答，避免重新生成后在对话记录中出现重复内容。
                     if msg_idx > 0 and st.session_state.messages[msg_idx - 1].get("role") == "user":
                         del st.session_state.messages[msg_idx - 1:msg_idx + 1]
@@ -912,33 +1050,19 @@ for msg_idx, msg in enumerate(st.session_state.messages):
                     st.caption(src["preview"])
         render_agent_steps(msg.get("agent_steps") or [])
 
-        if msg.get("csv_data"):
-            try:
-                csv_df = pd.DataFrame(msg["csv_data"])
-                st.dataframe(csv_df, use_container_width=True, hide_index=True)
-                st.download_button(
-                    "导出 CSV",
-                    csv_df.to_csv(index=False).encode("utf-8-sig"),
-                    file_name="query_result.csv",
-                    mime="text/csv",
-                    key=f"dl_{hashlib.md5(str(msg['content'][:80]).encode()).hexdigest()}",
-                )
-            except Exception:
-                pass
-        if msg.get("chart_data"):
-            try:
-                chart_df = pd.DataFrame(msg["chart_data"])
-                if len(chart_df) > 0 and len(chart_df.columns) >= 2:
-                    fig = create_chart(chart_df, msg.get("chart_title", ""), msg.get("question", ""))
-                    if fig:
-                        st.plotly_chart(fig, width='stretch', key=f"msg_chart_{msg_idx}", config={
-                            'displaylogo': False,
-                            'modeBarButtonsToAdd': ['downloadPNG', 'zoomIn', 'zoomOut', 'fullscreen'],
-                        })
-            except Exception as e:
-                st.caption(f"图表加载失败：{str(e)[:50]}")
-        if msg.get("sql"):
-            render_sql_block(msg["sql"], msg.get("query_time"))
+        try:
+            # result_data 为空（单值结果/无行）也走共用函数：SQL 块仍需独立展示
+            result_df = pd.DataFrame(msg["result_data"]) if msg.get("result_data") else None
+            render_result_block(
+                result_df,
+                sql=msg.get("sql"),
+                query_time=msg.get("query_time"),
+                question=msg.get("question", ""),
+                chart_title=msg.get("chart_title", ""),
+                key_prefix=f"msg_{msg_idx}",
+            )
+        except Exception as e:
+            st.caption(f"历史结果加载失败：{str(e)[:50]}")
 
 prompt = st.chat_input("输入你的业务问题...")
 
@@ -954,7 +1078,7 @@ if prompt:
             else "模型 API Key 尚未配置。请在侧栏完成模型连接并测试通过后，再重新提交问题。"
         )
         st.session_state.messages.append({"role": "user", "content": prompt,
-                                          "chart_data": None, "chart_title": "", "csv_data": None,
+                                          "chart_title": "", "result_data": None,
                                           "sql": None, "query_time": None})
         with st.chat_message("user"):
             st.markdown(prompt)
@@ -962,73 +1086,53 @@ if prompt:
             st.warning(recovery)
             st.caption("恢复路径：检查 Base URL、模型名称、API Key 与数据库只读连接；RAG 失败时会自动降级为纯 SQL 查询模式。")
         st.session_state.messages.append({"role": "assistant", "content": recovery,
-                                          "chart_data": None, "chart_title": "", "csv_data": None,
+                                          "chart_title": "", "result_data": None,
                                           "sql": None, "query_time": None, "rag_sources": []})
         st.stop()
 
     if is_sensitive_query(prompt):
         st.session_state.messages.append({"role": "user", "content": prompt,
-                                          "chart_data": None, "chart_title": "", "csv_data": None,
+                                          "chart_title": "", "result_data": None,
                                           "sql": None, "query_time": None})
         with st.chat_message("user"):
             st.markdown(prompt)
         with st.chat_message("assistant"):
             st.warning(SENSITIVE_RESPONSE)
         st.session_state.messages.append({"role": "assistant", "content": SENSITIVE_RESPONSE,
-                                          "chart_data": None, "chart_title": "", "csv_data": None,
+                                          "chart_title": "", "result_data": None,
                                           "sql": None, "query_time": None})
         st.stop()
 
-    cache_key = get_cache_key(prompt)
-    if cache_key in st.session_state.query_cache:
-        cached = st.session_state.query_cache[cache_key]
+    cache_key = get_cache_key(prompt, st.session_state.get("runtime_fingerprint", ""))
+    cached = _cache_lookup(st.session_state.query_cache, cache_key)
+    if cached is not None:
         st.session_state.messages.append({"role": "user", "content": prompt,
-                                          "chart_data": None, "chart_title": "", "csv_data": None,
+                                          "chart_title": "", "result_data": None,
                                           "sql": None, "query_time": None})
         with st.chat_message("user"):
             st.markdown(prompt)
         with st.chat_message("assistant"):
             st.info("从缓存读取")
             render_answer_with_highlights(cached["answer"])
-            if cached.get("csv_data"):
-                try:
-                    csv_df = pd.DataFrame(cached["csv_data"])
-                    st.dataframe(csv_df, use_container_width=True, hide_index=True)
-                except Exception:
-                    pass
-            if cached.get("chart_data"):
-                try:
-                    chart_df = pd.DataFrame(cached["chart_data"])
-                    if len(chart_df) > 0 and len(chart_df.columns) >= 2:
-                        fig = create_chart(chart_df, cached.get("chart_title", ""), prompt)
-                        if fig:
-                            st.plotly_chart(fig, width='stretch', key=f"cache_chart_{cache_key}", config={
-                                'displaylogo': False,
-                                'modeBarButtonsToAdd': ['downloadPNG', 'zoomIn', 'zoomOut', 'fullscreen'],
-                            })
-                except Exception as e:
-                    st.caption(f"缓存图表加载失败：{str(e)[:50]}")
-            if cached.get("csv_data"):
-                try:
-                    csv_df = pd.DataFrame(cached["csv_data"])
-                    st.download_button(
-                        "导出 CSV",
-                        csv_df.to_csv(index=False).encode("utf-8-sig"),
-                        file_name="query_result.csv",
-                        mime="text/csv",
-                        key=f"cached_dl_{cache_key}",
-                    )
-                except Exception:
-                    pass
-            if cached.get("sql"):
-                render_sql_block(cached["sql"], cached.get("query_time"))
+            try:
+                # result_data 为空也走共用函数：SQL 块仍需展示（与历史回放一致）
+                result_df = pd.DataFrame(cached["result_data"]) if cached.get("result_data") else None
+                render_result_block(
+                    result_df,
+                    sql=cached.get("sql"),
+                    query_time=cached.get("query_time"),
+                    question=prompt,
+                    chart_title=cached.get("chart_title", ""),
+                    key_prefix=f"cache_{cache_key}",
+                )
+            except Exception as e:
+                st.caption(f"缓存图表加载失败：{str(e)[:50]}")
             render_agent_steps(cached.get("agent_steps") or [])
         st.session_state.messages.append({
             "role": "assistant",
             "content": cached["answer"],
-            "chart_data": cached.get("chart_data"),
             "chart_title": cached.get("chart_title"),
-            "csv_data": cached.get("csv_data"),
+            "result_data": cached.get("result_data"),
             "sql": cached.get("sql"),
             "query_time": cached.get("query_time"),
             "question": prompt,
@@ -1038,7 +1142,7 @@ if prompt:
         st.stop()
 
     st.session_state.messages.append({"role": "user", "content": prompt,
-                                      "chart_data": None, "chart_title": "", "csv_data": None,
+                                      "chart_title": "", "result_data": None,
                                       "sql": None, "query_time": None})
     with st.chat_message("user"):
         st.markdown(prompt)
@@ -1099,7 +1203,7 @@ if prompt:
             st.session_state.messages.append({
                 "role": "assistant",
                 "content": "执行失败。请检查模型 Base URL、API Key、模型名称与数据库只读连接后重试；你的问题已保留在对话中。",
-                "chart_data": None, "chart_title": "", "csv_data": None,
+                "chart_title": "", "result_data": None,
                 "sql": None, "query_time": None, "rag_sources": [],
             })
             st.stop()
@@ -1108,70 +1212,36 @@ if prompt:
         step_placeholder.empty()
         answer_placeholder.empty()
 
-        chart_data = None
         chart_title = prompt[:30]
-        csv_data = None
         extracted_sql = agent_result.sql
 
         render_answer_with_highlights(answer)
         render_agent_steps(agent_steps)
         result_df = pd.DataFrame(agent_result.rows)
 
+        # SQL 无结果时，不直接断言"没有数据"——从回答文本兜底解析表格数据
+        if len(result_df) == 0:
+            fallback_df = parse_data_from_answer(answer)
+            if fallback_df is not None and len(fallback_df) > 0:
+                st.info(f"从回答文本解析数据成功，行数：{len(fallback_df)}")
+                result_df = fallback_df
 
-        if result_df is None or (isinstance(result_df, pd.DataFrame) and len(result_df) == 0):
-            result_df = parse_data_from_answer(answer)
-            if result_df is not None and len(result_df) > 0:
-                st.info(f"从回答文本解析数据成功，行数：{len(result_df)}")
-        
-        if result_df is not None and len(result_df) > 0:
-            st.dataframe(result_df, use_container_width=True, hide_index=True)
-            chart_data = result_df.to_dict(orient="records")
-            csv_data = result_df.to_dict(orient="records")
-
-            is_single_value = len(result_df) == 1 and len(result_df.columns) == 1
-            is_avg_question = any(k in prompt.lower() or k in prompt for k in ['平均', 'avg', 'mean', 'per capita'])
-            
-            if is_single_value or (is_avg_question and len(result_df) == 1):
-                if is_avg_question and len(result_df.columns) > 1:
-                    avg_cols = [c for c in result_df.columns if 'avg' in c.lower() or 'freq' in c.lower() or 'per' in c.lower()]
-                    if avg_cols:
-                        target_col = avg_cols[0]
-                    else:
-                        target_col = result_df.columns[-1]
-                else:
-                    target_col = result_df.columns[0]
-                
-                single_val = result_df.iloc[0][target_col]
-                st.metric(label="查询结果", value=f"{single_val:.2f}" if isinstance(single_val, (int, float)) else str(single_val))
-                chart_data = None
-            else:
-                fig = create_chart(result_df, chart_title, prompt)
-                if fig:
-                    st.plotly_chart(fig, width='stretch', key=f"live_chart_{cache_key}", config={
-                        'displaylogo': False,
-                        'modeBarButtonsToAdd': ['downloadPNG', 'zoomIn', 'zoomOut', 'fullscreen'],
-                    })
-            
-            st.download_button(
-                "导出 CSV",
-                result_df.to_csv(index=False).encode("utf-8-sig"),
-                file_name="query_result.csv",
-                mime="text/csv",
-                key=f"dl_{cache_key}",
-            )
-        
-        elif extracted_sql:
-            st.warning("SQL 执行无结果")
-
-        if extracted_sql:
-            render_sql_block(extracted_sql, query_time)
+        result_data = render_result_block(
+            result_df,
+            sql=extracted_sql,
+            query_time=query_time,
+            question=prompt,
+            chart_title=chart_title,
+            key_prefix=f"live_{cache_key}",
+            show_metric=True,
+            warn_empty=True,
+        )
 
         msg_data = {
             "role": "assistant",
             "content": answer,
-            "chart_data": chart_data,
             "chart_title": chart_title,
-            "csv_data": csv_data,
+            "result_data": result_data,
             "sql": extracted_sql,
             "query_time": query_time,
             "question": prompt,
@@ -1180,16 +1250,15 @@ if prompt:
         }
         st.session_state.messages.append(msg_data)
 
-        st.session_state.query_cache[cache_key] = {
+        _cache_store(st.session_state.query_cache, cache_key, {
             "answer": answer,
-            "chart_data": chart_data,
             "chart_title": chart_title,
-            "csv_data": csv_data,
+            "result_data": result_data,
             "sql": extracted_sql,
             "query_time": query_time,
             "rag_sources": rag_sources,
             "agent_steps": agent_steps,
-        }
+        })
 
         st.session_state.query_history.append({
             "question": prompt,

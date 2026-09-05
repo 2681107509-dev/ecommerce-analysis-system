@@ -82,10 +82,8 @@ class VectorStore:
         except Exception:
             pass
         self._store.add_documents(documents=documents, ids=ids)
-        try:
-            self._store.persist()
-        except Exception:
-            pass
+        # langchain-chroma 的 Chroma 客户端写入即自动持久化（PersistentClient），
+        # 无需（也没有）手动 persist 调用。
         return ids
 
     def search(self,

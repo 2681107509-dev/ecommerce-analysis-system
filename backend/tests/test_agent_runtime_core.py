@@ -20,6 +20,9 @@ from agent_core.runtime import AgentRuntime
         "SELECT SLEEP(20)",
         "SELECT LOAD_FILE('/etc/passwd')",
         "SELECT * FROM orders FOR UPDATE",
+        "SELECT * FROM orders FOR SHARE",
+        "SELECT * FROM orders FOR UPDATE SKIP LOCKED",
+        "SELECT * FROM orders FOR SHARE NOWAIT",
     ],
 )
 def test_sql_guard_blocks_unsafe_or_multiple_statements(sql: str) -> None:
@@ -51,6 +54,44 @@ async def test_memory_conversation_expires() -> None:
     store = MemoryConversationStore(ttl_seconds=0)
     await store.save_turn("alice", "thread", "question", "answer")
     assert await store.get_history("alice", "thread") == []
+
+
+@pytest.mark.asyncio
+async def test_pop_last_turn_removes_only_the_tail_turn() -> None:
+    store = MemoryConversationStore()
+    await store.save_turn("alice", "t", "q1", "a1")
+    await store.save_turn("alice", "t", "q2", "a2")
+    assert await store.pop_last_turn("alice", "t", question="q2") is True
+    history = await store.get_history("alice", "t")
+    assert [m["content"] for m in history] == ["q1", "a1"]
+
+
+@pytest.mark.asyncio
+async def test_pop_last_turn_refuses_mismatched_question() -> None:
+    """重新生成可能针对历史中间轮次：末轮问题不匹配时宁可不删，防止误删新近上下文。"""
+    store = MemoryConversationStore()
+    await store.save_turn("alice", "t", "q1", "a1")
+    await store.save_turn("alice", "t", "q2", "a2")
+    assert await store.pop_last_turn("alice", "t", question="q1") is False
+    assert len(await store.get_history("alice", "t")) == 4
+
+
+@pytest.mark.asyncio
+async def test_pop_last_turn_empty_and_single_turn_edges() -> None:
+    store = MemoryConversationStore()
+    assert await store.pop_last_turn("alice", "t") is False
+    await store.save_turn("alice", "t", "q1", "a1")
+    assert await store.pop_last_turn("alice", "t") is True  # question=None 时不做匹配校验
+    assert await store.get_history("alice", "t") == []
+    assert await store.pop_last_turn("alice", "t") is False
+
+
+@pytest.mark.asyncio
+async def test_pop_last_turn_falls_back_when_primary_unavailable() -> None:
+    store = FallbackConversationStore(_FailingStore())
+    await store.save_turn("alice", "t", "question", "answer")
+    assert await store.pop_last_turn("alice", "t") is True
+    assert await store.get_history("alice", "t") == []
 
 
 class _FailingStore:

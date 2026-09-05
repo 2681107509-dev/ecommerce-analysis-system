@@ -23,8 +23,10 @@ _FORBIDDEN_KEYWORDS = re.compile(
 )
 _FORBIDDEN_SELECT_PATTERNS = re.compile(
     r"\bINTO\s+(?:OUTFILE|DUMPFILE)\b|"
-    r"\bFOR\s+UPDATE\b|"
+    r"\bFOR\s+(?:UPDATE|SHARE)\b|"
     r"\bLOCK\s+IN\s+SHARE\s+MODE\b|"
+    # MySQL 8.0 锁子句修饰符，只随 FOR UPDATE/FOR SHARE 出现，一并拦截
+    r"\b(?:NOWAIT|SKIP\s+LOCKED)\b|"
     r"\b(?:LOAD_FILE|SLEEP|BENCHMARK)\s*\(",
     re.IGNORECASE,
 )

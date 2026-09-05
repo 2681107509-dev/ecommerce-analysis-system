@@ -114,55 +114,34 @@ def test_retrieve_does_not_timeout_when_fast(fake_store):
     assert stats["timeouts"] == 0
 
 
-# ─────────────────── format_context ───────────────────
+# ─────────────────── 异常不写缓存 ───────────────────
 
 
-def test_format_context_empty():
-    assert Retriever.format_context([]) == ""
+def test_retrieve_failure_is_not_cached():
+    """store 抛异常产生的空结果绝不能写入缓存，否则一次瞬时故障
+    会被放大成 TTL 内同问题一律"无知识命中"。"""
+    store = MagicMock()
+    # 第一次检索抛异常，之后恢复正常
+    store.search.side_effect = [RuntimeError("Chroma 抖动"), [{"content": "x", "metadata": {}, "score": 0.9}]]
+    r = Retriever(store, k=3, score_threshold=0.4, cache_max=10, cache_ttl=60)
+
+    assert r.retrieve("q") == []
+    assert r.get_stats()["cache_size"] == 0  # 异常结果未入缓存
+
+    # 第二次同问题必须真正打到 store（未被缓存的空结果挡住），且拿到正常结果
+    out = r.retrieve("q")
+    assert len(out) == 1
+    assert store.search.call_count == 2
 
 
-def test_format_context_includes_source_and_section():
-    docs = [{
-        "content": "x",
-        "metadata": {"source": "biz.md", "section": "s1"},
-        "score": 0.9,
-    }]
-    out = Retriever.format_context(docs)
-    assert "biz.md" in out
-    assert "s1" in out
-    assert "x" in out
-
-
-def test_format_context_includes_score_when_requested():
-    docs = [{
-        "content": "x",
-        "metadata": {"source": "biz.md", "section": "s1"},
-        "score": 0.91,
-    }]
-    out = Retriever.format_context(docs, include_score=True)
-    assert "0.91" in out
-
-
-def test_format_context_omits_score_by_default():
-    """默认不显示分数，避免冗余。"""
-    docs = [{
-        "content": "x",
-        "metadata": {"source": "biz.md", "section": "s1"},
-        "score": 0.91,
-    }]
-    out = Retriever.format_context(docs)
-    assert "0.91" not in out
-
-
-def test_format_context_truncates_when_exceeds_max_chars():
-    docs = [{
-        "content": "a" * 5000,
-        "metadata": {"source": "b.md", "section": "s"},
-        "score": 0.5,
-    }]
-    out = Retriever.format_context(docs, max_total_chars=500)
-    # 允许几十字符的标题余量
-    assert len(out) <= 600
+def test_retrieve_empty_result_is_cached(fake_store):
+    """正常检索出的空结果（阈值过滤后无命中）仍照常缓存，避免反复打库。"""
+    fake_store.search.return_value = []
+    r = Retriever(fake_store, k=3, score_threshold=0.4, cache_max=10, cache_ttl=60)
+    r.retrieve("q")
+    r.retrieve("q")
+    assert fake_store.search.call_count == 1
+    assert r.get_stats()["cache_size"] == 1
 
 
 # ─────────────────── stats ───────────────────

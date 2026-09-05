@@ -10,14 +10,6 @@ from rag import metrics
 from rag.retriever import Retriever, _bucketize
 
 
-@pytest.fixture(autouse=True)
-def reset_tool_stats():
-    """每个测试前清零，避免污染。"""
-    metrics.reset_tool_stats()
-    yield
-    metrics.reset_tool_stats()
-
-
 # ─────────── _bucketize ───────────
 
 
@@ -34,56 +26,6 @@ def test_bucketize_boundaries(score, expected):
     assert _bucketize(score) == expected
 
 
-# ─────────── record_tool_call / get_tool_stats ───────────
-
-
-def test_record_tool_call_hit():
-    metrics.record_tool_call(hit=True)
-    s = metrics.get_tool_stats()
-    assert s["tool_call_count"] == 1
-    assert s["tool_no_hit_count"] == 0
-    assert s["tool_error_count"] == 0
-
-
-def test_record_tool_call_no_hit():
-    metrics.record_tool_call(hit=False)
-    s = metrics.get_tool_stats()
-    assert s["tool_no_hit_count"] == 1
-
-
-def test_record_tool_call_error():
-    metrics.record_tool_call(hit=False, error=True)
-    s = metrics.get_tool_stats()
-    assert s["tool_error_count"] == 1
-    assert s["tool_no_hit_count"] == 1
-
-
-def test_record_tool_call_thread_safe():
-    """并发调用不应丢计数。"""
-    import threading
-    barrier = threading.Barrier(100)
-
-    def worker():
-        barrier.wait()
-        for _ in range(10):
-            metrics.record_tool_call(hit=True)
-
-    threads = [threading.Thread(target=worker) for _ in range(100)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-    s = metrics.get_tool_stats()
-    assert s["tool_call_count"] == 1000
-
-
-def test_reset_tool_stats():
-    metrics.record_tool_call(hit=True)
-    metrics.reset_tool_stats()
-    s = metrics.get_tool_stats()
-    assert s["tool_call_count"] == 0
-
-
 # ─────────── dump_combined_stats / load_stats ───────────
 
 
@@ -91,18 +33,16 @@ def test_dump_and_load_atomic(tmp_path):
     """dump + load 应产生等价 payload。"""
     p = tmp_path / "stats.json"
     r_stats = {"total_queries": 5, "hit_rate_pct": 80.0}
-    t_stats = {"tool_call_count": 3}
-    metrics.dump_combined_stats(r_stats, t_stats, path=str(p))
+    metrics.dump_combined_stats(r_stats, path=str(p))
     loaded = metrics.load_stats(str(p))
     assert loaded["retriever"] == r_stats
-    assert loaded["tool"] == t_stats
     assert "timestamp" in loaded
 
 
 def test_dump_creates_parent_dir(tmp_path):
     """目标目录不存在时自动创建。"""
     p = tmp_path / "nested" / "deep" / "stats.json"
-    metrics.dump_combined_stats({}, {}, path=str(p))
+    metrics.dump_combined_stats({}, path=str(p))
     assert p.exists()
 
 
@@ -120,7 +60,7 @@ def test_load_returns_none_on_corrupted(tmp_path):
 def test_dump_uses_atomic_rename(tmp_path):
     """dump 时应有 .tmp 文件，rename 后消失。"""
     p = tmp_path / "stats.json"
-    metrics.dump_combined_stats({}, {}, path=str(p))
+    metrics.dump_combined_stats({}, path=str(p))
     # 最终 .tmp 不应残留
     assert not (tmp_path / "stats.json.tmp").exists()
     assert p.exists()
@@ -164,52 +104,6 @@ def test_log_event_swallows_logging_errors(monkeypatch):
     fake_logger.info.side_effect = RuntimeError("boom")
     monkeypatch.setattr(metrics, "_events_logger", fake_logger)
     metrics.log_event("test")  # 不应抛
-
-
-# ─────────── render_prometheus ───────────
-
-
-def test_render_prometheus_empty():
-    out = metrics.render_prometheus(None)
-    assert "# no stats available" in out
-
-
-def test_render_prometheus_full():
-    stats = {
-        "retriever": {
-            "total_queries": 10,
-            "cache_hits": 3,
-            "store_hits": 7,
-            "no_results": 2,
-            "timeouts": 1,
-            "avg_latency_ms": 12.5,
-            "hit_rate_pct": 30.0,
-            "score_buckets": {
-                "[0,0.2)": 0, "[0.2,0.4)": 1, "[0.4,0.6)": 2,
-                "[0.6,0.8)": 3, "[0.8,1.0]": 4,
-            },
-        },
-        "tool": {
-            "tool_call_count": 5, "tool_no_hit_count": 1, "tool_error_count": 0,
-        },
-    }
-    out = metrics.render_prometheus(stats)
-    # 关键指标
-    assert "rag_query_total 10" in out
-    assert "rag_cache_hits_total 3" in out
-    assert "rag_store_hits_total 7" in out
-    assert "rag_no_results_total 2" in out
-    assert "rag_timeouts_total 1" in out
-    assert "rag_query_latency_ms 12.5" in out
-    assert "rag_hit_rate_pct 30" in out
-    assert "rag_tool_call_total 5" in out
-    assert "rag_tool_no_hit_total 1" in out
-    # score bucket 标签
-    assert 'range="[0.8,1.0]"' in out
-    assert "rag_score_bucket" in out
-    # Prometheus 协议头
-    assert "# TYPE rag_query_total counter" in out
-    assert "text/plain" not in out  # 不应在文本里
 
 
 # ─────────── Retriever 集成 ───────────
@@ -281,7 +175,6 @@ def test_retriever_dump_stats_creates_file(tmp_path, fake_store):
     assert p.exists()
     data = json.loads(p.read_text(encoding="utf-8"))
     assert "retriever" in data
-    assert "tool" in data
     assert "timestamp" in data
     assert data["retriever"]["total_queries"] >= 1
 

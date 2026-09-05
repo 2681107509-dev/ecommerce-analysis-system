@@ -128,12 +128,6 @@ async def export_orders(
 
     count_stmt = select(func.count(Order.id)).where(*conditions)
     total = (await db.execute(count_stmt)).scalar() or 0
-    if total == 0:
-        return {
-            "total": 0,
-            "items": [],
-            "message": "没有符合条件的订单数据",
-        }
 
     if export_format == "csv":
         return StreamingResponse(
@@ -143,6 +137,8 @@ async def export_orders(
         )
 
     # Excel 格式需要先构建完整工作簿；CSV 使用上方流式路径避免大对象驻留内存。
+    # total == 0 时不做特殊分支：流式生成器与下面的工作簿构建对空结果
+    # 自然产出"仅表头"的文件，避免同一端点出现 JSON 与文件两种契约。
     all_data: list[list] = []
     async for rows in _iter_order_chunks(db, conditions, total):
         all_data.extend(_order_export_row(order) for order in rows)

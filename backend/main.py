@@ -21,7 +21,7 @@ from backend.routes.monitor import (
     render_rag_prometheus,
 )
 from backend.services.rfm_service import RfmDataUnavailableError
-from backend.utils.cache import cleanup_memory_cache, init_redis
+from backend.utils.cache import cleanup_memory_cache, close_redis, init_redis
 from backend.utils.cache import clear as clear_cache
 from backend.utils.rate_limiter import check_rate_limit
 
@@ -57,9 +57,9 @@ async def lifespan(app: FastAPI):
     logger.info("✅ 数据库连接检查完成")
 
     if settings.redis_enabled:
-        redis_ok = init_redis(settings.redis_url)
+        redis_ok = await init_redis(settings.redis_url)
         if redis_ok:
-            clear_cache()
+            await clear_cache()
             logger.info("✅ Redis 缓存已清空，避免数据版本切换后命中旧值")
             logger.info("✅ Redis 缓存已启用")
         else:
@@ -76,6 +76,7 @@ async def lifespan(app: FastAPI):
         await cleanup_task
     except asyncio.CancelledError:
         pass
+    await close_redis()
     await engine.dispose()
     logger.info("👋 数据库连接池已关闭")
 

@@ -184,7 +184,7 @@ class TestRfmDataUnavailable:
         monkeypatch.setattr(cache, "_redis_client", None)
         monkeypatch.setattr(cache, "_redis_available", False)
         clear_rfm_snapshot_cache()
-        cache.clear()
+        await cache.clear()
 
         call_count = 0
 
@@ -313,3 +313,29 @@ class TestSqlGuardRegression:
     ])
     def test_unsafe_queries_still_blocked(self, sql):
         assert is_read_only_sql(sql) is False
+
+
+# ─── 监控统计：动态路径归一化（防基数内存泄漏） ───────────
+
+
+class TestMonitorEndpointNormalization:
+    def test_dynamic_segments_collapse_to_one_key(self):
+        from backend.routes.monitor import _normalize_endpoint
+
+        assert _normalize_endpoint("/api/orders/123") == _normalize_endpoint("/api/orders/456")
+        assert _normalize_endpoint("/api/orders/123") == "/api/orders/{param}"
+        assert (
+            _normalize_endpoint("/api/orders/550e8400-e29b-41d4-a716-446655440000")
+            == "/api/orders/{param}"
+        )
+        assert _normalize_endpoint("/api/analytics/top-products") == "/api/analytics/top-products"
+        assert _normalize_endpoint("/") == "/"
+
+    def test_record_request_does_not_grow_per_order_id(self):
+        from backend.routes.monitor import _request_stats, record_request
+
+        record_request("/api/orders/100001", 200, 1.0)
+        record_request("/api/orders/100002", 200, 2.0)
+        # 全局统计跨测试共享，不假设 key 由本次创建；只验证两条记录
+        # 都落在同一个归一化 key 上，而不是各自新建原始路径 key
+        assert "/api/orders/{param}" in _request_stats["by_endpoint"], "不同订单 ID 必须归入同一 key"

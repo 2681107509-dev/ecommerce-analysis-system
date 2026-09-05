@@ -1,7 +1,6 @@
 """检索器：在 VectorStore 之上增加：
 - LRU + TTL 缓存（减少重复检索）
 - 超时保护
-- 上下文格式化
 - 可观测埋点（counters + score 桶分布 + 文件级 stats 共享）
 """
 from __future__ import annotations
@@ -11,7 +10,6 @@ import logging
 import threading
 import time
 from collections import OrderedDict
-from pathlib import Path
 
 from . import metrics
 from .vector_store import VectorStore
@@ -44,7 +42,6 @@ class Retriever:
     Usage:
         retriever = Retriever(store)
         docs = retriever.retrieve("复购率怎么算")
-        context = retriever.format_context(docs)
     """
 
     def __init__(self,
@@ -129,6 +126,7 @@ class Retriever:
 
         # 2. 检索
         t0 = time.time()
+        search_failed = False
         try:
             results = self._store.search(
                 query, k=k, score_threshold=threshold, filter=filter
@@ -136,17 +134,21 @@ class Retriever:
         except Exception as e:
             logger.error("RAG 检索失败: %s", e)
             results = []
+            search_failed = True
         elapsed_ms = (time.time() - t0) * 1000
         if elapsed_ms > timeout_s * 1000:
             self.stats["timeouts"] += 1
         self.stats["misses"] += 1
         self.stats["total_ms"] += elapsed_ms
 
-        # 3. 写缓存
-        with self._lock:
-            if len(self._cache) >= self._cache_max:
-                self._cache.popitem(last=False)  # LRU 淘汰
-            self._cache[cache_key] = (time.time(), results)
+        # 3. 写缓存：异常产生的空结果绝不能入缓存，否则一次瞬时故障
+        #    （Chroma 抖动、重建中的空库）会被放大成 TTL 内一律"无知识命中"。
+        #    正常检索出的空结果（阈值过滤后无命中）仍照常缓存。
+        if not search_failed:
+            with self._lock:
+                if len(self._cache) >= self._cache_max:
+                    self._cache.popitem(last=False)  # LRU 淘汰
+                self._cache[cache_key] = (time.time(), results)
 
         # 4. 更新 Top1 score 桶
         if results:
@@ -174,43 +176,6 @@ class Retriever:
                      query[:30], len(results),
                      results[0]["score"] if results else 0, elapsed_ms)
         return results
-
-    @staticmethod
-    def format_context(docs: list[dict],
-                       max_total_chars: int = 2400,
-                       include_score: bool = False) -> str:
-        """把检索结果格式化为可注入 prompt 的上下文。
-
-        格式示例：
-            【参考业务知识 1】（来源：business_glossary.md，复购率）
-            复购率 = 消费 2 次及以上的用户占总用户比例...
-        """
-        if not docs:
-            return ""
-        lines = ["# 参考业务知识（来自 RAG 检索，仅供参考）"]
-        total = 0
-        for i, d in enumerate(docs, 1):
-            md = d.get("metadata", {})
-            source = md.get("source", "unknown")
-            section = md.get("section", "")
-            header = f"【参考 {i}】(来源: {Path(source).name}"
-            if section:
-                header += f", 章节: {section}"
-            if include_score:
-                header += f", 相关度: {d.get('score', 0):.2f}"
-            header += ")"
-            content = d["content"].strip()
-            block = f"{header}\n{content}"
-            if total + len(block) > max_total_chars:
-                # 截断最后一个 block
-                remain = max_total_chars - total
-                if remain > 100:
-                    block = block[:remain] + "\n...(已截断)"
-                    lines.append(block)
-                break
-            lines.append(block)
-            total += len(block)
-        return "\n\n".join(lines)
 
     def get_stats(self) -> dict:
         """获取检索统计指标。

@@ -112,8 +112,9 @@ def evaluate_item(retriever: Retriever, item: dict) -> dict:
                 hit = True
                 hit_doc_type = d.get("metadata", {}).get("doc_type")
                 break
-        # 若 expected_doc 指定，验证 doc_type 一致
-        doc_type_ok = True
+        # doc_type 一致性只在有命中时有意义：检索未命中时记 None，
+        # 避免把"没命中"算成"doc_type 正确"
+        doc_type_ok = None
         if expected_doc and hit_doc_type:
             doc_type_ok = (hit_doc_type == expected_doc)
 
@@ -170,7 +171,7 @@ def render_report(results: list[dict], out_path: Path) -> None:
     if skipped:
         lines.append(f"## 数据类问题（已跳过）: {len(skipped)} 条")
         lines.append("")
-        lines.append("数据类问题的评估需调用真实 LLM + SQL 工具，不在 RAG 评估范围内。")
+        lines.append("数据类问题的 SQL 生成能力由 eval/run_sql_eval.py 单独评估（--execute 可落库执行）。")
 
     out_path.write_text("\n".join(lines), encoding="utf-8")
     print(f"📄 报告已写入: {out_path}")
